@@ -1,0 +1,278 @@
+import { useState, useRef, useEffect, KeyboardEvent } from "react";
+import { Terminal as TerminalIcon, Shield, ArrowLeft } from "lucide-react";
+import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { securityTools } from "@/lib/security-tools";
+
+interface TermLine {
+  type: "input" | "output" | "error" | "info";
+  text: string;
+}
+
+const WELCOME = `
+╔══════════════════════════════════════════════╗
+║       🛡️  CyberGuard Terminal v2.0          ║
+║       وحدة تنفيذ الأوامر الأمنية            ║
+╚══════════════════════════════════════════════╝
+
+اكتب "help" لعرض الأوامر المتاحة.
+`;
+
+const Terminal = () => {
+  const [lines, setLines] = useState<TermLine[]>([
+    { type: "info", text: WELCOME },
+  ]);
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [histIdx, setHistIdx] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [lines]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const addLine = (type: TermLine["type"], text: string) =>
+    setLines((prev) => [...prev, { type, text }]);
+
+  const handleHelp = () => {
+    const cats = {
+      scanning: "🔍 فحص واستطلاع",
+      offensive: "⚔️ هجومية",
+      defensive: "🛡️ دفاعية",
+    };
+    let help = `\n📋 الأوامر المتاحة:\n${"─".repeat(50)}\n`;
+    help += `  help               - عرض هذه القائمة\n`;
+    help += `  clear              - مسح الشاشة\n`;
+    help += `  tools              - عرض جميع الأدوات\n`;
+    help += `  run <tool> [args]  - تنفيذ أداة\n`;
+    help += `  info <tool>        - معلومات عن أداة\n\n`;
+    help += `📌 مثال: run dns_lookup domain=example.com\n`;
+    help += `📌 مثال: run port_scan target=example.com ports=80,443\n`;
+    return help;
+  };
+
+  const handleTools = () => {
+    let out = `\n🛠️ الأدوات المتاحة (${securityTools.length}):\n${"─".repeat(50)}\n`;
+    const grouped: Record<string, typeof securityTools> = {};
+    securityTools.forEach((t) => {
+      if (!grouped[t.category]) grouped[t.category] = [];
+      grouped[t.category].push(t);
+    });
+    const catLabels: Record<string, string> = {
+      scanning: "🔍 فحص واستطلاع",
+      offensive: "⚔️ هجومية",
+      defensive: "🛡️ دفاعية",
+    };
+    for (const [cat, tools] of Object.entries(grouped)) {
+      out += `\n${catLabels[cat] || cat}:\n`;
+      tools.forEach((t) => {
+        out += `  ${t.icon} ${t.id.padEnd(22)} ${t.nameAr}\n`;
+      });
+    }
+    return out;
+  };
+
+  const handleInfo = (toolId: string) => {
+    const tool = securityTools.find((t) => t.id === toolId);
+    if (!tool) return `❌ أداة غير موجودة: ${toolId}`;
+    let out = `\n${tool.icon} ${tool.name} (${tool.nameAr})\n${"─".repeat(40)}\n`;
+    out += `📝 ${tool.description}\n`;
+    out += `📂 التصنيف: ${tool.category}\n`;
+    out += `\n📋 المعاملات:\n`;
+    tool.args.forEach((a) => {
+      out += `  ${a.required ? "●" : "○"} ${a.key.padEnd(15)} ${a.label} (${a.placeholder})\n`;
+    });
+    out += `\n📌 الاستخدام: run ${tool.id} ${tool.args.map((a) => `${a.key}=${a.placeholder}`).join(" ")}\n`;
+    return out;
+  };
+
+  const handleRun = async (toolId: string, argsStr: string) => {
+    const tool = securityTools.find((t) => t.id === toolId);
+    if (!tool) {
+      addLine("error", `❌ أداة غير موجودة: ${toolId}\nاكتب "tools" لعرض الأدوات المتاحة.`);
+      return;
+    }
+
+    // Parse args: key=value pairs
+    const args: Record<string, string> = {};
+    const pairs = argsStr.match(/(\w+)=("[^"]*"|'[^']*'|\S+)/g) || [];
+    pairs.forEach((pair) => {
+      const eqIdx = pair.indexOf("=");
+      const key = pair.substring(0, eqIdx);
+      let val = pair.substring(eqIdx + 1);
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
+        val = val.slice(1, -1);
+      args[key] = val;
+    });
+
+    // Check required args
+    const missing = tool.args.filter((a) => a.required && !args[a.key]);
+    if (missing.length > 0) {
+      addLine("error", `❌ معاملات مطلوبة: ${missing.map((a) => a.key).join(", ")}\n📌 استخدم: run ${toolId} ${tool.args.map((a) => `${a.key}=${a.placeholder}`).join(" ")}`);
+      return;
+    }
+
+    addLine("info", `⏳ جاري تنفيذ ${tool.icon} ${tool.nameAr}...`);
+    setRunning(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke("cyber-execute", {
+        body: { tool: toolId, args },
+      });
+
+      if (error) throw error;
+      addLine("output", data?.result || "✅ تم التنفيذ بدون نتائج");
+    } catch (e: any) {
+      addLine("error", `❌ خطأ في التنفيذ: ${e.message || "غير معروف"}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const processCommand = async (cmd: string) => {
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
+
+    addLine("input", `$ ${trimmed}`);
+    setHistory((prev) => [trimmed, ...prev].slice(0, 50));
+    setHistIdx(-1);
+
+    const parts = trimmed.split(/\s+/);
+    const command = parts[0].toLowerCase();
+
+    switch (command) {
+      case "help":
+        addLine("info", handleHelp());
+        break;
+      case "clear":
+        setLines([]);
+        break;
+      case "tools":
+        addLine("info", handleTools());
+        break;
+      case "info":
+        if (parts[1]) {
+          addLine("info", handleInfo(parts[1]));
+        } else {
+          addLine("error", "❌ حدد اسم الأداة: info <tool_id>");
+        }
+        break;
+      case "run":
+        if (parts[1]) {
+          await handleRun(parts[1], parts.slice(2).join(" "));
+        } else {
+          addLine("error", '❌ حدد الأداة: run <tool_id> [args]\nاكتب "tools" لعرض الأدوات.');
+        }
+        break;
+      default:
+        // Try as direct tool name
+        const directTool = securityTools.find((t) => t.id === command);
+        if (directTool) {
+          await handleRun(command, parts.slice(1).join(" "));
+        } else {
+          addLine("error", `❌ أمر غير معروف: ${command}\nاكتب "help" للمساعدة.`);
+        }
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !running) {
+      processCommand(input);
+      setInput("");
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (history.length > 0) {
+        const newIdx = Math.min(histIdx + 1, history.length - 1);
+        setHistIdx(newIdx);
+        setInput(history[newIdx]);
+      }
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (histIdx > 0) {
+        const newIdx = histIdx - 1;
+        setHistIdx(newIdx);
+        setInput(history[newIdx]);
+      } else {
+        setHistIdx(-1);
+        setInput("");
+      }
+    }
+  };
+
+  const getLineColor = (type: TermLine["type"]) => {
+    switch (type) {
+      case "input": return "text-primary";
+      case "output": return "text-foreground";
+      case "error": return "text-destructive";
+      case "info": return "text-muted-foreground";
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-background">
+      {/* Header */}
+      <header className="border-b border-border bg-card px-4 py-3 flex items-center gap-3">
+        <Link to="/" className="p-2 rounded-lg hover:bg-muted transition-colors">
+          <ArrowLeft className="w-4 h-4 text-muted-foreground" />
+        </Link>
+        <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/30 flex items-center justify-center">
+          <TerminalIcon className="w-5 h-5 text-primary" />
+        </div>
+        <div>
+          <h1 className="text-sm font-display font-semibold text-foreground flex items-center gap-2">
+            CyberGuard Terminal
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+              LIVE
+            </span>
+          </h1>
+          <p className="text-xs text-muted-foreground">وحدة تنفيذ أوامر أمنية مباشرة</p>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Shield className="w-3.5 h-3.5" />
+          <span>{securityTools.length} أداة متاحة</span>
+        </div>
+      </header>
+
+      {/* Terminal body */}
+      <div
+        className="flex-1 overflow-y-auto p-4 font-mono text-sm cursor-text"
+        onClick={() => inputRef.current?.focus()}
+      >
+        <div className="max-w-5xl mx-auto space-y-0.5">
+          {lines.map((line, i) => (
+            <pre key={i} className={`whitespace-pre-wrap break-words ${getLineColor(line.type)}`} dir="ltr">
+              {line.text}
+            </pre>
+          ))}
+
+          {/* Input line */}
+          <div className="flex items-center gap-2 mt-2" dir="ltr">
+            <span className="text-primary font-bold select-none">
+              {running ? "⏳" : "$"}
+            </span>
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={running}
+              className="flex-1 bg-transparent outline-none text-foreground caret-primary placeholder:text-muted-foreground/50 disabled:opacity-50"
+              placeholder={running ? "جاري التنفيذ..." : "اكتب أمراً..."}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Terminal;

@@ -1,7 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Play, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { securityTools, executeTool, categoryInfo, getAllTools, type SecurityTool, type ToolCategory } from "@/lib/security-tools";
-import { getCustomTools, getCustomToolDefinitions } from "@/lib/custom-tools";
+import { fetchCustomTools, mapToSecurityTool, type CustomToolDefinition } from "@/lib/custom-tools";
 import { AddToolDialog } from "@/components/AddToolDialog";
 
 interface ToolsPanelProps {
@@ -27,11 +27,16 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, Record<string, string>>>({});
   const [activeCategory, setActiveCategory] = useState<ToolCategory>("scanning");
-  const [customToolsVersion, setCustomToolsVersion] = useState(0);
+  const [customDefs, setCustomDefs] = useState<CustomToolDefinition[]>([]);
 
-  const customTools = getCustomTools();
-  const customDefs = getCustomToolDefinitions();
-  const allTools = getAllTools(customTools);
+  const loadCustomTools = useCallback(async () => {
+    try { setCustomDefs(await fetchCustomTools()); } catch {}
+  }, []);
+
+  useEffect(() => { loadCustomTools(); }, [loadCustomTools]);
+
+  const customSecurityTools = customDefs.map(mapToSecurityTool);
+  const allTools = getAllTools(customSecurityTools);
 
   const handleRun = async (tool: SecurityTool) => {
     const args = formData[tool.id] || {};
@@ -40,10 +45,9 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
 
     setLoading(tool.id);
     try {
-      // Check if it's a custom tool
       const customId = tool.id.replace("custom_", "");
-      const customDef = customDefs.find(d => d.id === customId);
-      const customConfig = customDef ? { executionType: customDef.executionType, executionConfig: customDef.executionConfig } : undefined;
+      const customDef = customDefs.find(d => d.tool_id === customId);
+      const customConfig = customDef ? { executionType: customDef.execution_type, executionConfig: customDef.execution_config } : undefined;
       const result = await executeTool(tool.id, args, customConfig);
       onResult(result);
     } catch (e) {
@@ -59,12 +63,7 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
     }));
   };
 
-  const handleToolsChanged = useCallback(() => {
-    setCustomToolsVersion(v => v + 1);
-  }, []);
-
   const filteredTools = allTools.filter(t => t.category === activeCategory);
-  const info = categoryInfo[activeCategory];
 
   return (
     <div className="space-y-3">
@@ -102,6 +101,9 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
             >
               <span>{tool.icon}</span>
               <span className="flex-1 text-right text-foreground text-xs">{tool.nameAr}</span>
+              {tool.id.startsWith("custom_") && (
+                <span className="text-[9px] px-1 py-0.5 rounded bg-accent text-accent-foreground">مخصصة</span>
+              )}
               {expanded === tool.id ? (
                 <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" />
               ) : (
@@ -150,7 +152,7 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
       </div>
 
       {/* Add custom tool button */}
-      <AddToolDialog onToolsChanged={handleToolsChanged} />
+      <AddToolDialog onToolsChanged={loadCustomTools} />
     </div>
   );
 }

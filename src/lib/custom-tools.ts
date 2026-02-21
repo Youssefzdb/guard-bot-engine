@@ -1,86 +1,94 @@
+import { supabase } from "@/integrations/supabase/client";
 import type { SecurityTool, ToolCategory } from "./security-tools";
-
-const STORAGE_KEY = "cyberguard_custom_tools";
 
 export interface CustomToolDefinition {
   id: string;
+  tool_id: string;
   name: string;
-  nameAr: string;
+  name_ar: string;
   icon: string;
   description: string;
   category: ToolCategory;
   args: { key: string; label: string; placeholder: string; required?: boolean }[];
-  // Custom execution: the code template to run on the backend
-  executionType: "http_fetch" | "dns_query" | "tcp_connect" | "custom_script";
-  executionConfig: Record<string, string>;
+  execution_type: "http_fetch" | "dns_query" | "tcp_connect" | "custom_script";
+  execution_config: Record<string, string>;
 }
 
-export function getCustomTools(): SecurityTool[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const tools: CustomToolDefinition[] = JSON.parse(raw);
-    return tools.map(t => ({
-      id: `custom_${t.id}`,
-      name: t.name,
-      nameAr: t.nameAr,
-      icon: t.icon,
-      description: t.description,
-      category: t.category,
-      args: t.args,
-    }));
-  } catch {
-    return [];
-  }
+export function mapToSecurityTool(t: CustomToolDefinition): SecurityTool {
+  return {
+    id: `custom_${t.tool_id}`,
+    name: t.name,
+    nameAr: t.name_ar,
+    icon: t.icon,
+    description: t.description,
+    category: t.category as ToolCategory,
+    args: t.args as SecurityTool["args"],
+  };
 }
 
-export function getCustomToolDefinitions(): CustomToolDefinition[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
+export async function fetchCustomTools(): Promise<CustomToolDefinition[]> {
+  const { data, error } = await supabase
+    .from("custom_tools")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(d => ({
+    ...d,
+    category: d.category as ToolCategory,
+    args: d.args as CustomToolDefinition["args"],
+    execution_type: d.execution_type as CustomToolDefinition["execution_type"],
+    execution_config: d.execution_config as Record<string, string>,
+  }));
 }
 
-export function saveCustomTool(tool: CustomToolDefinition): void {
-  const tools = getCustomToolDefinitions();
-  const existing = tools.findIndex(t => t.id === tool.id);
-  if (existing >= 0) {
-    tools[existing] = tool;
-  } else {
-    tools.push(tool);
-  }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tools));
+export async function saveCustomTool(tool: {
+  tool_id: string;
+  name: string;
+  name_ar: string;
+  icon: string;
+  description: string;
+  category: string;
+  args: unknown;
+  execution_type: string;
+  execution_config: unknown;
+}): Promise<void> {
+  const { error } = await supabase
+    .from("custom_tools")
+    .upsert(tool as any, { onConflict: "tool_id" });
+  if (error) throw error;
 }
 
-export function deleteCustomTool(id: string): void {
-  const tools = getCustomToolDefinitions().filter(t => t.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tools));
+export async function deleteCustomTool(tool_id: string): Promise<void> {
+  const { error } = await supabase
+    .from("custom_tools")
+    .delete()
+    .eq("tool_id", tool_id);
+  if (error) throw error;
 }
 
-export function exportCustomTools(): string {
-  return localStorage.getItem(STORAGE_KEY) || "[]";
+export function exportTools(tools: CustomToolDefinition[]): string {
+  return JSON.stringify(tools, null, 2);
 }
 
-export function importCustomTools(json: string): number {
-  try {
-    const imported: CustomToolDefinition[] = JSON.parse(json);
-    if (!Array.isArray(imported)) throw new Error("Invalid format");
-    const existing = getCustomToolDefinitions();
-    let count = 0;
-    for (const tool of imported) {
-      if (tool.id && tool.name && tool.nameAr) {
-        const idx = existing.findIndex(t => t.id === tool.id);
-        if (idx >= 0) existing[idx] = tool;
-        else existing.push(tool);
-        count++;
-      }
+export async function importTools(json: string): Promise<number> {
+  const imported = JSON.parse(json);
+  if (!Array.isArray(imported)) throw new Error("صيغة غير صالحة");
+  let count = 0;
+  for (const t of imported) {
+    if (t.tool_id && t.name && t.name_ar) {
+      await saveCustomTool({
+        tool_id: t.tool_id,
+        name: t.name,
+        name_ar: t.name_ar,
+        icon: t.icon || "🔧",
+        description: t.description || "",
+        category: t.category || "scanning",
+        args: t.args || [],
+        execution_type: t.execution_type || "http_fetch",
+        execution_config: t.execution_config || {},
+      });
+      count++;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
-    return count;
-  } catch {
-    throw new Error("صيغة JSON غير صالحة");
   }
+  return count;
 }

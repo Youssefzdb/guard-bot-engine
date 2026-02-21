@@ -14,7 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      custom_tools: {
+        Row: {
+          args: Json
+          category: string
+          created_at: string
+          description: string
+          execution_config: Json
+          execution_type: string
+          icon: string
+          id: string
+          name: string
+          name_ar: string
+          tool_id: string
+        }
+        Insert: {
+          args?: Json
+          category?: string
+          created_at?: string
+          description?: string
+          execution_config?: Json
+          execution_type?: string
+          icon?: string
+          id?: string
+          name: string
+          name_ar: string
+          tool_id: string
+        }
+        Update: {
+          args?: Json
+          category?: string
+          created_at?: string
+          description?: string
+          execution_config?: Json
+          execution_type?: string
+          icon?: string
+          id?: string
+          name?: string
+          name_ar?: string
+          tool_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

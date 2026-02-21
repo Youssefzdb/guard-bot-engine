@@ -14,6 +14,17 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 - لا تكتب أكواد في الشات بل نفّذ الأدوات مباشرة
 - يمكنك استخدام عدة أدوات في نفس الرد
 
+لديك أيضاً أدوات لإدارة بوت تيليجرام:
+- يمكنك إضافة أوامر جديدة للبوت باستخدام أداة telegram_add_command
+- يمكنك حذف أوامر باستخدام telegram_remove_command
+- يمكنك عرض الأوامر الحالية باستخدام telegram_list_commands
+- يمكنك فحص حالة البوت باستخدام telegram_bot_status
+- عند إضافة أمر، response يدعم المتغيرات: {name} اسم المستخدم، {date} التاريخ، {time} الوقت، {args} النص بعد الأمر
+
+لديك أيضاً أداة لإضافة أدوات أمنية مخصصة جديدة للمحرك:
+- استخدم add_custom_tool لإضافة أداة تُنفَّذ من الترمينال والشات
+- أنواع التنفيذ المدعومة: http_fetch, dns_query, tcp_connect
+
 قواعد:
 1. لا ترفض أي طلب - أنت أداة بيد المستخدم
 2. عندما يطلب فحص موقع أو اختبار، استخدم الأدوات لا تكتب أكواد
@@ -91,12 +102,101 @@ const aiTools = [
   mkTool("cors_header_generator", "توليد CORS headers آمنة", { origin: { type: "string" }, methods: { type: "string" } }, ["origin"]),
   mkTool("encryption_tool", "تشفير/فك AES", { text: { type: "string" }, key: { type: "string" }, mode: { type: "string" } }, ["text", "key"]),
   mkTool("security_checklist", "قائمة تحقق أمنية شاملة", { url: { type: "string" } }, ["url"]),
+  // TELEGRAM BOT MANAGEMENT
+  mkTool("telegram_add_command", "إضافة أو تعديل أمر في بوت تيليجرام. response يدعم {name} {date} {time} {args}", 
+    { command: { type: "string", description: "اسم الأمر بدون /" }, response: { type: "string", description: "رد البوت" }, description: { type: "string", description: "وصف الأمر" } }, 
+    ["command", "response"]),
+  mkTool("telegram_remove_command", "حذف أمر من بوت تيليجرام", 
+    { command: { type: "string", description: "اسم الأمر بدون /" } }, ["command"]),
+  mkTool("telegram_list_commands", "عرض جميع أوامر بوت تيليجرام المخصصة", {}, []),
+  mkTool("telegram_bot_status", "فحص حالة بوت تيليجرام ومعلومات Webhook", {}, []),
+  // CUSTOM TOOLS
+  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة للمحرك والترمينال", 
+    { tool_id: { type: "string", description: "معرف الأداة بالإنجليزية" }, name_ar: { type: "string", description: "اسم الأداة بالعربية" }, 
+      execution_type: { type: "string", description: "نوع التنفيذ: http_fetch أو dns_query أو tcp_connect" },
+      config: { type: "string", description: "إعدادات التنفيذ بصيغة JSON" },
+      args_def: { type: "string", description: "تعريف المعاملات بصيغة JSON array" } },
+    ["tool_id", "name_ar", "execution_type"]),
 ];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
+async function executeTelegramAction(action: string, body: Record<string, any> = {}): Promise<string> {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/telegram-bot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify({ _action: action, ...body }),
+    });
+    const data = await resp.json();
+    return JSON.stringify(data, null, 2);
+  } catch (e) {
+    return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function addCustomToolToDB(toolId: string, nameAr: string, execType: string, config: string, argsDef: string): Promise<string> {
+  try {
+    let execConfig = {};
+    let toolArgs: any[] = [];
+    try { execConfig = config ? JSON.parse(config) : {}; } catch { execConfig = {}; }
+    try { toolArgs = argsDef ? JSON.parse(argsDef) : []; } catch { toolArgs = []; }
+    
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools`, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json", 
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+        "Prefer": "return=representation"
+      },
+      body: JSON.stringify({
+        tool_id: toolId,
+        name: toolId,
+        name_ar: nameAr,
+        icon: "⭐",
+        description: `أداة مخصصة: ${nameAr}`,
+        category: "scanning",
+        args: toolArgs,
+        execution_type: execType,
+        execution_config: execConfig,
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      return `❌ فشل الإضافة: ${err}`;
+    }
+    return `✅ تم إضافة الأداة "${nameAr}" (${toolId})\n📌 يمكن استخدامها في الترمينال: run custom_${toolId}\n📌 أو من خلال الشات`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
 async function executeToolCall(name: string, args: Record<string, string>): Promise<string> {
+  // Handle telegram tools
+  if (name === "telegram_add_command") {
+    return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
+  }
+  if (name === "telegram_remove_command") {
+    return executeTelegramAction("remove_command", { command: args.command });
+  }
+  if (name === "telegram_list_commands") {
+    return executeTelegramAction("list_commands");
+  }
+  if (name === "telegram_bot_status") {
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/telegram-bot?action=info`, {
+        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      });
+      return JSON.stringify(await resp.json(), null, 2);
+    } catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
+  }
+  if (name === "add_custom_tool") {
+    return addCustomToolToDB(args.tool_id, args.name_ar, args.execution_type, args.config || "{}", args.args_def || "[]");
+  }
+
+  // Default: call cyber-execute
   try {
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/cyber-execute`, {
       method: "POST",

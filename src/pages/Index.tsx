@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History } from "lucide-react";
+import { AgentSettingsDialog, getAgentCustomPrompt } from "@/components/AgentSettingsDialog";
 import { Link } from "react-router-dom";
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ChatInput";
@@ -109,6 +110,7 @@ const Index = () => {
     try {
       await streamChat({
         messages: newMessages,
+        customSystemPrompt: getAgentCustomPrompt() || undefined,
         onDelta: (chunk) => upsertAssistant(chunk),
         onDone: () => {
           setIsLoading(false);
@@ -219,6 +221,7 @@ const Index = () => {
             </div>
 
             <div className="hidden md:flex ml-auto items-center gap-3">
+              <AgentSettingsDialog />
               <Link to="/terminal" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors px-2 py-1 rounded-lg hover:bg-primary/10">
                 <Terminal className="w-3.5 h-3.5" />
                 <span>Terminal</span>

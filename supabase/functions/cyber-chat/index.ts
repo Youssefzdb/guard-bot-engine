@@ -400,11 +400,14 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages } = await req.json();
+    const { messages, customSystemPrompt } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    const aiMessages: any[] = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
+    const finalSystemPrompt = customSystemPrompt 
+      ? `${customSystemPrompt}\n\n---\n\n${SYSTEM_PROMPT}` 
+      : SYSTEM_PROMPT;
+    const aiMessages: any[] = [{ role: "system", content: finalSystemPrompt }, ...messages];
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({

@@ -56,6 +56,33 @@ export type Database = {
         }
         Relationships: []
       }
+      telegram_commands: {
+        Row: {
+          command: string
+          created_at: string
+          description: string
+          id: string
+          response: string
+          updated_at: string
+        }
+        Insert: {
+          command: string
+          created_at?: string
+          description?: string
+          id?: string
+          response: string
+          updated_at?: string
+        }
+        Update: {
+          command?: string
+          created_at?: string
+          description?: string
+          id?: string
+          response?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

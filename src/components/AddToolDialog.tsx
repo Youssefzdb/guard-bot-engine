@@ -1,23 +1,23 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plus, X, Trash2, Upload, Download } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { type ToolCategory } from "@/lib/security-tools";
-import { saveCustomTool, deleteCustomTool, getCustomToolDefinitions, exportCustomTools, importCustomTools, type CustomToolDefinition } from "@/lib/custom-tools";
+import { saveCustomTool, deleteCustomTool, fetchCustomTools, exportTools, importTools, type CustomToolDefinition } from "@/lib/custom-tools";
 import { useToast } from "@/hooks/use-toast";
 
 interface AddToolDialogProps {
   onToolsChanged: () => void;
 }
 
-const defaultTool: Omit<CustomToolDefinition, "id"> = {
+const defaultTool = {
   name: "",
-  nameAr: "",
+  name_ar: "",
   icon: "🔧",
   description: "",
-  category: "scanning",
+  category: "scanning" as ToolCategory,
   args: [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }],
-  executionType: "http_fetch",
-  executionConfig: {},
+  execution_type: "http_fetch" as CustomToolDefinition["execution_type"],
+  execution_config: {} as Record<string, string>,
 };
 
 const iconOptions = ["🔧", "⚡", "🛠️", "🔬", "🎯", "💣", "🕸️", "🧰", "📡", "🔮", "🦠", "🧲", "⛏️", "🗡️", "🔋"];
@@ -27,52 +27,65 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
   const [tab, setTab] = useState<"create" | "manage">("create");
   const [tool, setTool] = useState(defaultTool);
   const [args, setArgs] = useState(defaultTool.args);
+  const [customTools, setCustomTools] = useState<CustomToolDefinition[]>([]);
   const { toast } = useToast();
 
-  const customTools = getCustomToolDefinitions();
+  useEffect(() => {
+    if (open) loadTools();
+  }, [open]);
 
-  const handleSave = () => {
-    if (!tool.name.trim() || !tool.nameAr.trim()) {
+  const loadTools = async () => {
+    try { setCustomTools(await fetchCustomTools()); } catch {}
+  };
+
+  const handleSave = async () => {
+    if (!tool.name.trim() || !tool.name_ar.trim()) {
       toast({ title: "خطأ", description: "الاسم مطلوب", variant: "destructive" });
       return;
     }
-    const id = tool.name.toLowerCase().replace(/[^a-z0-9]/g, "_");
-    saveCustomTool({ ...tool, id, args });
-    onToolsChanged();
-    toast({ title: "تم", description: `تمت إضافة الأداة: ${tool.nameAr}` });
-    setTool(defaultTool);
-    setArgs(defaultTool.args);
-    setTab("manage");
+    const tool_id = tool.name.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    try {
+      await saveCustomTool({ ...tool, tool_id, args });
+      onToolsChanged();
+      toast({ title: "تم", description: `تمت إضافة الأداة: ${tool.name_ar}` });
+      setTool(defaultTool);
+      setArgs(defaultTool.args);
+      await loadTools();
+      setTab("manage");
+    } catch (e) {
+      toast({ title: "خطأ", description: e instanceof Error ? e.message : "فشل الحفظ", variant: "destructive" });
+    }
   };
 
-  const handleDelete = (id: string) => {
-    deleteCustomTool(id);
-    onToolsChanged();
-    toast({ title: "تم", description: "تم حذف الأداة" });
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteCustomTool(id);
+      onToolsChanged();
+      await loadTools();
+      toast({ title: "تم", description: "تم حذف الأداة" });
+    } catch {}
   };
 
   const handleExport = () => {
-    const data = exportCustomTools();
+    const data = exportTools(customTools);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "custom-tools.json";
-    a.click();
+    a.href = url; a.download = "custom-tools.json"; a.click();
     URL.revokeObjectURL(url);
   };
 
   const handleImport = () => {
     const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
+    input.type = "file"; input.accept = ".json";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
       try {
         const text = await file.text();
-        const count = importCustomTools(text);
+        const count = await importTools(text);
         onToolsChanged();
+        await loadTools();
         toast({ title: "تم", description: `تم استيراد ${count} أداة` });
       } catch (err) {
         toast({ title: "خطأ", description: err instanceof Error ? err.message : "فشل الاستيراد", variant: "destructive" });
@@ -81,17 +94,9 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
     input.click();
   };
 
-  const addArg = () => {
-    setArgs([...args, { key: "", label: "", placeholder: "", required: false }]);
-  };
-
-  const removeArg = (i: number) => {
-    setArgs(args.filter((_, idx) => idx !== i));
-  };
-
-  const updateArg = (i: number, field: string, value: string | boolean) => {
-    setArgs(args.map((a, idx) => idx === i ? { ...a, [field]: value } : a));
-  };
+  const addArg = () => setArgs([...args, { key: "", label: "", placeholder: "", required: false }]);
+  const removeArg = (i: number) => setArgs(args.filter((_, idx) => idx !== i));
+  const updateArg = (i: number, field: string, value: string | boolean) => setArgs(args.map((a, idx) => idx === i ? { ...a, [field]: value } : a));
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -106,7 +111,6 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
           <DialogTitle className="text-sm font-display">إدارة الأدوات المخصصة</DialogTitle>
         </DialogHeader>
 
-        {/* Tabs */}
         <div className="flex gap-1 p-1 bg-muted rounded-lg">
           <button onClick={() => setTab("create")} className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-all ${tab === "create" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
             إنشاء أداة
@@ -118,7 +122,6 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
 
         {tab === "create" ? (
           <div className="space-y-3">
-            {/* Icon picker */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-1 block">الأيقونة</label>
               <div className="flex flex-wrap gap-1">
@@ -131,7 +134,6 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
               </div>
             </div>
 
-            {/* Name fields */}
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[11px] text-muted-foreground mb-0.5 block">الاسم (English)</label>
@@ -140,19 +142,17 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
               </div>
               <div>
                 <label className="text-[11px] text-muted-foreground mb-0.5 block">الاسم (عربي)</label>
-                <input type="text" value={tool.nameAr} onChange={e => setTool({ ...tool, nameAr: e.target.value })}
+                <input type="text" value={tool.name_ar} onChange={e => setTool({ ...tool, name_ar: e.target.value })}
                   placeholder="أداتي المخصصة" className="w-full bg-background border border-border rounded px-2 py-1.5 text-xs" />
               </div>
             </div>
 
-            {/* Description */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-0.5 block">الوصف</label>
               <input type="text" value={tool.description} onChange={e => setTool({ ...tool, description: e.target.value })}
                 placeholder="وصف الأداة ووظيفتها" className="w-full bg-background border border-border rounded px-2 py-1.5 text-xs" />
             </div>
 
-            {/* Category */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-0.5 block">التصنيف</label>
               <select value={tool.category} onChange={e => setTool({ ...tool, category: e.target.value as ToolCategory })}
@@ -163,10 +163,9 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
               </select>
             </div>
 
-            {/* Execution type */}
             <div>
               <label className="text-[11px] text-muted-foreground mb-0.5 block">نوع التنفيذ</label>
-              <select value={tool.executionType} onChange={e => setTool({ ...tool, executionType: e.target.value as CustomToolDefinition["executionType"] })}
+              <select value={tool.execution_type} onChange={e => setTool({ ...tool, execution_type: e.target.value as CustomToolDefinition["execution_type"] })}
                 className="w-full bg-background border border-border rounded px-2 py-1.5 text-xs">
                 <option value="http_fetch">HTTP Fetch - طلب HTTP لرابط</option>
                 <option value="dns_query">DNS Query - استعلام DNS</option>
@@ -175,16 +174,15 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
               </select>
             </div>
 
-            {/* Execution config based on type */}
-            {tool.executionType === "http_fetch" && (
+            {tool.execution_type === "http_fetch" && (
               <div className="space-y-2 p-2 bg-muted/50 rounded-lg">
                 <label className="text-[10px] text-muted-foreground block">إعدادات HTTP</label>
-                <input type="text" placeholder="URL template: https://api.example.com/{target}" 
-                  value={tool.executionConfig.urlTemplate || ""}
-                  onChange={e => setTool({ ...tool, executionConfig: { ...tool.executionConfig, urlTemplate: e.target.value } })}
+                <input type="text" placeholder="URL template: https://api.example.com/{target}"
+                  value={tool.execution_config.urlTemplate || ""}
+                  onChange={e => setTool({ ...tool, execution_config: { ...tool.execution_config, urlTemplate: e.target.value } })}
                   className="w-full bg-background border border-border rounded px-2 py-1.5 text-[11px] font-mono" dir="ltr" />
-                <select value={tool.executionConfig.method || "GET"}
-                  onChange={e => setTool({ ...tool, executionConfig: { ...tool.executionConfig, method: e.target.value } })}
+                <select value={tool.execution_config.method || "GET"}
+                  onChange={e => setTool({ ...tool, execution_config: { ...tool.execution_config, method: e.target.value } })}
                   className="w-full bg-background border border-border rounded px-2 py-1.5 text-xs">
                   <option value="GET">GET</option>
                   <option value="POST">POST</option>
@@ -193,17 +191,16 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
               </div>
             )}
 
-            {tool.executionType === "custom_script" && (
+            {tool.execution_type === "custom_script" && (
               <div className="space-y-2 p-2 bg-muted/50 rounded-lg">
                 <label className="text-[10px] text-muted-foreground block">سكريبت التنفيذ (JavaScript)</label>
-                <textarea placeholder={`// المتغيرات المتاحة: args (المدخلات)\n// مثال:\nconst resp = await fetch(args.url);\nconst data = await resp.text();\nreturn "النتيجة: " + data.length + " بايت";`}
-                  value={tool.executionConfig.script || ""}
-                  onChange={e => setTool({ ...tool, executionConfig: { ...tool.executionConfig, script: e.target.value } })}
+                <textarea placeholder={`// المتغيرات المتاحة: args\nconst resp = await fetch(args.url);\nreturn "تم";`}
+                  value={tool.execution_config.script || ""}
+                  onChange={e => setTool({ ...tool, execution_config: { ...tool.execution_config, script: e.target.value } })}
                   className="w-full bg-background border border-border rounded px-2 py-1.5 text-[11px] font-mono min-h-[100px]" dir="ltr" />
               </div>
             )}
 
-            {/* Arguments */}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[11px] text-muted-foreground">المدخلات (Arguments)</label>
@@ -241,7 +238,6 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
           </div>
         ) : (
           <div className="space-y-3">
-            {/* Import/Export */}
             <div className="flex gap-2">
               <button onClick={handleExport} className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 rounded border border-border text-xs hover:bg-muted transition-colors">
                 <Download className="w-3 h-3" /> تصدير
@@ -256,13 +252,13 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
             ) : (
               <div className="space-y-1">
                 {customTools.map(t => (
-                  <div key={t.id} className="flex items-center gap-2 p-2 rounded-lg border border-border">
+                  <div key={t.tool_id} className="flex items-center gap-2 p-2 rounded-lg border border-border">
                     <span>{t.icon}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">{t.nameAr}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">{t.name} • {t.category} • {t.executionType}</p>
+                      <p className="text-xs font-medium text-foreground truncate">{t.name_ar}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">{t.name} • {t.category} • {t.execution_type}</p>
                     </div>
-                    <button onClick={() => handleDelete(t.id)} className="text-destructive/60 hover:text-destructive p-1">
+                    <button onClick={() => handleDelete(t.tool_id)} className="text-destructive/60 hover:text-destructive p-1">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>

@@ -329,17 +329,21 @@ export const securityTools: SecurityTool[] = [
 
 const EXEC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cyber-execute`;
 
-export async function executeTool(toolId: string, args: Record<string, string>): Promise<string> {
+export async function executeTool(toolId: string, args: Record<string, string>, customConfig?: { executionType: string; executionConfig: Record<string, string> }): Promise<string> {
   const resp = await fetch(EXEC_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
-    body: JSON.stringify({ tool: toolId, args }),
+    body: JSON.stringify({ tool: toolId, args, customConfig }),
   });
 
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || "فشل التنفيذ");
   return data.result;
+}
+
+export function getAllTools(customTools: SecurityTool[]): SecurityTool[] {
+  return [...securityTools, ...customTools];
 }

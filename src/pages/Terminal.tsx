@@ -334,7 +334,6 @@ const Terminal = () => {
         setRunning(true);
         try {
           const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-          // Auto-detect: if code is a single expression without return/console/var/let/const/if/for/while/class/function, wrap with return
           const trimmedCode = code.trim();
           const isExpression = !trimmedCode.startsWith("return ") &&
             !trimmedCode.startsWith("return;") &&
@@ -343,51 +342,51 @@ const Terminal = () => {
             !trimmedCode.startsWith("let ") &&
             !trimmedCode.startsWith("const ") &&
             !trimmedCode.startsWith("if") &&
-            !trimmedCode.startsWith("if(") &&
             !trimmedCode.startsWith("for") &&
-            !trimmedCode.startsWith("for(") &&
             !trimmedCode.startsWith("while") &&
-            !trimmedCode.startsWith("while(") &&
             !trimmedCode.startsWith("class ") &&
             !trimmedCode.startsWith("function ") &&
             !trimmedCode.startsWith("async ") &&
             !trimmedCode.startsWith("try") &&
             !trimmedCode.startsWith("{") &&
             !trimmedCode.includes(";");
-          const wrappedCode = isExpression ? `return ${trimmedCode}` : trimmedCode;
+          const wrappedCode = isExpression ? "return " + trimmedCode : trimmedCode;
 
-          const fn = new AsyncFunction(`
-            const __results = [];
-            const __origLog = console.log;
-            const __origWarn = console.warn;
-            const __origError = console.error;
-            const __origInfo = console.info;
-            const __fmt = (a) => {
-              if (a === undefined) return 'undefined';
-              if (a === null) return 'null';
-              if (a instanceof Error) return a.stack || a.message;
-              if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch { return String(a); } }
-              return String(a);
-            };
-            const __logFn = (prefix) => (...args) => { __results.push((prefix ? prefix + ' ' : '') + args.map(__fmt).join(' ')); };
-            console.log = __logFn('');
-            console.warn = __logFn('⚠️');
-            console.error = __logFn('❌');
-            console.info = __logFn('ℹ️');
-            try {
-              const __ret = await (async () => { ${wrappedCode} })();
-              console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;
-              if (__ret !== undefined) __results.push(__fmt(__ret));
-              return __results.join('\\n') || '✅ تم التنفيذ (بدون مخرجات)';
-            } catch(e) {
-              console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;
-              throw e;
-            }
-          `);
+          // Build function body without template literals to avoid backtick conflicts
+          const fnBody = [
+            "const __results = [];",
+            "const __origLog = console.log;",
+            "const __origWarn = console.warn;",
+            "const __origError = console.error;",
+            "const __origInfo = console.info;",
+            "const __fmt = function(a) {",
+            "  if (a === undefined) return 'undefined';",
+            "  if (a === null) return 'null';",
+            "  if (a instanceof Error) return a.stack || a.message;",
+            "  if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch(e) { return String(a); } }",
+            "  return String(a);",
+            "};",
+            "const __logFn = function(prefix) { return function() { var args = Array.from(arguments); __results.push((prefix ? prefix + ' ' : '') + args.map(__fmt).join(' ')); }; };",
+            "console.log = __logFn('');",
+            "console.warn = __logFn('\\u26a0\\ufe0f');",
+            "console.error = __logFn('\\u274c');",
+            "console.info = __logFn('\\u2139\\ufe0f');",
+            "try {",
+            "  const __ret = await (async function() { " + wrappedCode + " })();",
+            "  console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;",
+            "  if (__ret !== undefined) __results.push(__fmt(__ret));",
+            "  return __results.join('\\n') || '\\u2705 تم التنفيذ (بدون مخرجات)';",
+            "} catch(e) {",
+            "  console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;",
+            "  throw e;",
+            "}"
+          ].join("\n");
+
+          const fn = new AsyncFunction(fnBody);
           const result = await fn();
           addLine("output", result);
         } catch (e: any) {
-          addLine("error", `❌ خطأ: ${e.message}\n${e.stack ? e.stack.split('\n').slice(0,3).join('\n') : ''}`);
+          addLine("error", "❌ خطأ: " + e.message);
         } finally {
           setRunning(false);
         }

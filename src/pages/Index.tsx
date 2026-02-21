@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History } from "lucide-react";
+import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History, Settings } from "lucide-react";
 import { AgentSettingsDialog, getAgentCustomPrompt } from "@/components/AgentSettingsDialog";
 import { Link } from "react-router-dom";
 import { ChatMessage } from "@/components/ChatMessage";
@@ -209,6 +209,7 @@ const Index = () => {
             </div>
 
             <div className="ml-auto flex md:hidden gap-1">
+              <AgentSettingsDialog />
               <button onClick={() => setShowSidebar(true)} className="p-2 rounded-lg text-muted-foreground hover:text-primary transition-colors">
                 <History className="w-4 h-4" />
               </button>

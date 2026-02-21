@@ -10,6 +10,13 @@ interface TermLine {
   text: string;
 }
 
+interface VFile {
+  name: string;
+  content: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const WELCOME = `
 ╔══════════════════════════════════════════════╗
 ║       🛡️  CyberGuard Terminal v2.0          ║
@@ -29,8 +36,11 @@ const Terminal = () => {
   const [running, setRunning] = useState(false);
   const [customTools, setCustomTools] = useState<SecurityTool[]>([]);
   const [loadedLibs, setLoadedLibs] = useState<{ name: string; url: string }[]>([]);
+  const [vFiles, setVFiles] = useState<VFile[]>([]);
+  const [nanoMode, setNanoMode] = useState<{ fileName: string; content: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const nanoRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,6 +78,11 @@ const Terminal = () => {
     help += `  exec_js <code>        - تنفيذ كود JavaScript مباشرة\n`;
     help += `  load_lib <url|name>   - تحميل مكتبة JS من CDN\n`;
     help += `  libs                  - عرض المكتبات المحمّلة\n`;
+    help += `  nano <filename>       - إنشاء/تحرير ملف\n`;
+    help += `  cat <filename>        - عرض محتوى ملف\n`;
+    help += `  ls                    - عرض الملفات\n`;
+    help += `  rm <filename>         - حذف ملف\n`;
+    help += `  run_file <filename>   - تنفيذ ملف JS\n`;
     help += `  reload                - إعادة تحميل الأوامر المخصصة\n\n`;
     help += `📌 أنواع التنفيذ: http_fetch, dns_query, tcp_connect\n`;
     help += `📌 مثال إضافة: addcmd my_scan "فحصي" http_fetch url=https://example.com target:الهدف:example.com\n`;
@@ -440,6 +455,62 @@ const Terminal = () => {
         }
         break;
       }
+      case "nano": {
+        const fileName = parts[1];
+        if (!fileName) {
+          addLine("error", "❌ حدد اسم الملف: nano <filename>\nمثال: nano script.js");
+          break;
+        }
+        const existing = vFiles.find(f => f.name === fileName);
+        setNanoMode({ fileName, content: existing?.content || "" });
+        setTimeout(() => nanoRef.current?.focus(), 100);
+        break;
+      }
+      case "cat": {
+        const fileName = parts[1];
+        if (!fileName) { addLine("error", "❌ حدد اسم الملف: cat <filename>"); break; }
+        const file = vFiles.find(f => f.name === fileName);
+        if (!file) { addLine("error", `❌ ملف غير موجود: ${fileName}\nاكتب "ls" لعرض الملفات.`); break; }
+        addLine("output", `📄 ${file.name}:\n${"─".repeat(40)}\n${file.content}`);
+        break;
+      }
+      case "ls": {
+        if (vFiles.length === 0) {
+          addLine("info", `\n📭 لا توجد ملفات.\nاستخدم "nano <filename>" لإنشاء ملف.\n`);
+        } else {
+          let out = `\n📁 الملفات (${vFiles.length}):\n${"─".repeat(40)}\n`;
+          vFiles.forEach(f => {
+            const size = new Blob([f.content]).size;
+            const date = f.updatedAt.toLocaleString("ar-EG");
+            out += `  📄 ${f.name.padEnd(25)} ${size} bytes   ${date}\n`;
+          });
+          addLine("info", out);
+        }
+        break;
+      }
+      case "rm": {
+        const fileName = parts[1];
+        if (!fileName) { addLine("error", "❌ حدد اسم الملف: rm <filename>"); break; }
+        const idx = vFiles.findIndex(f => f.name === fileName);
+        if (idx === -1) { addLine("error", `❌ ملف غير موجود: ${fileName}`); break; }
+        setVFiles(prev => prev.filter(f => f.name !== fileName));
+        addLine("output", `🗑️ تم حذف الملف: ${fileName}`);
+        break;
+      }
+      case "run_file": {
+        const fileName = parts[1];
+        if (!fileName) { addLine("error", "❌ حدد اسم الملف: run_file <filename.js>"); break; }
+        const file = vFiles.find(f => f.name === fileName);
+        if (!file) { addLine("error", `❌ ملف غير موجود: ${fileName}`); break; }
+        if (!fileName.endsWith(".js") && !fileName.endsWith(".ts")) {
+          addLine("error", "❌ يمكن تنفيذ ملفات .js و .ts فقط");
+          break;
+        }
+        addLine("info", `⏳ جاري تنفيذ ${fileName}...`);
+        // Reuse exec_js logic
+        await processCommand(`exec_js ${file.content}`);
+        break;
+      }
       case "reload":
         await loadCustomTools();
         addLine("info", "🔄 تم إعادة تحميل الأوامر المخصصة.");
@@ -487,8 +558,77 @@ const Terminal = () => {
     }
   };
 
+  const handleNanoSave = () => {
+    if (!nanoMode) return;
+    const { fileName, content } = nanoMode;
+    setVFiles(prev => {
+      const idx = prev.findIndex(f => f.name === fileName);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], content, updatedAt: new Date() };
+        return updated;
+      }
+      return [...prev, { name: fileName, content, createdAt: new Date(), updatedAt: new Date() }];
+    });
+    addLine("output", `✅ تم حفظ الملف: ${fileName} (${new Blob([content]).size} bytes)`);
+    setNanoMode(null);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
+  const handleNanoCancel = () => {
+    addLine("info", "❌ تم إلغاء التحرير.");
+    setNanoMode(null);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-screen bg-background relative">
+      {/* Nano Editor Overlay */}
+      {nanoMode && (
+        <div className="absolute inset-0 z-50 flex flex-col bg-background">
+          <div className="border-b border-primary/30 bg-primary/10 px-4 py-2 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-mono">
+              <span className="text-primary font-bold">GNU nano</span>
+              <span className="text-muted-foreground">─</span>
+              <span className="text-foreground">{nanoMode.fileName}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleNanoSave}
+                className="px-3 py-1 text-xs font-mono bg-primary/20 text-primary border border-primary/30 rounded hover:bg-primary/30 transition-colors"
+              >
+                ^O حفظ
+              </button>
+              <button
+                onClick={handleNanoCancel}
+                className="px-3 py-1 text-xs font-mono bg-destructive/20 text-destructive border border-destructive/30 rounded hover:bg-destructive/30 transition-colors"
+              >
+                ^X إغلاق
+              </button>
+            </div>
+          </div>
+          <textarea
+            ref={nanoRef}
+            value={nanoMode.content}
+            onChange={(e) => setNanoMode({ ...nanoMode, content: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.ctrlKey && e.key === "o") { e.preventDefault(); handleNanoSave(); }
+              if (e.ctrlKey && e.key === "x") { e.preventDefault(); handleNanoCancel(); }
+            }}
+            className="flex-1 bg-background text-foreground font-mono text-sm p-4 outline-none resize-none caret-primary border-none"
+            placeholder="ابدأ الكتابة..."
+            dir="ltr"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <div className="border-t border-border bg-card px-4 py-1.5 flex items-center gap-4 text-[11px] font-mono text-muted-foreground">
+            <span>^O حفظ</span>
+            <span>^X إغلاق</span>
+            <span className="ml-auto">{nanoMode.content.split("\n").length} أسطر | {new Blob([nanoMode.content]).size} bytes</span>
+          </div>
+        </div>
+      )}
+
       <header className="border-b border-border bg-card px-4 py-3 flex items-center gap-3">
         <Link to="/" className="p-2 rounded-lg hover:bg-muted transition-colors">
           <ArrowLeft className="w-4 h-4 text-muted-foreground" />
@@ -530,7 +670,7 @@ const Terminal = () => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={running}
+              disabled={running || !!nanoMode}
               className="flex-1 bg-transparent outline-none text-foreground caret-primary placeholder:text-muted-foreground/50 disabled:opacity-50"
               placeholder={running ? "جاري التنفيذ..." : "اكتب أمراً..."}
               autoComplete="off"

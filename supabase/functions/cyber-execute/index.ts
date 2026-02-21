@@ -1142,6 +1142,126 @@ async function executeCustomTool(args: Record<string, string>, config: { executi
   return results.join("\n");
 }
 
+// === NEW ADVANCED TOOLS ===
+
+tools.security_txt_check = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const base = url.replace(/\/+$/, "");
+  const results: string[] = [`🔐 فحص Security.txt: ${base}\n${"─".repeat(40)}`];
+  const paths = [`${base}/.well-known/security.txt`, `${base}/security.txt`];
+  for (const path of paths) {
+    try {
+      const resp = await fetch(path);
+      if (resp.ok) {
+        const text = await resp.text();
+        results.push(`✅ موجود في: ${path}\n`);
+        results.push(text.slice(0, 2000));
+        const hasContact = /Contact:/i.test(text);
+        const hasExpires = /Expires:/i.test(text);
+        const hasEncryption = /Encryption:/i.test(text);
+        results.push(`\n📊 تحليل:`);
+        results.push(`  ${hasContact ? "✅" : "❌"} Contact`);
+        results.push(`  ${hasExpires ? "✅" : "❌"} Expires`);
+        results.push(`  ${hasEncryption ? "✅" : "❌"} Encryption`);
+        return results.join("\n");
+      } else { await resp.text(); }
+    } catch {}
+  }
+  results.push(`❌ لا يوجد ملف security.txt`);
+  return results.join("\n");
+};
+
+tools.dns_zone_transfer = async (args) => {
+  const { domain } = args;
+  if (!domain) return "❌ مطلوب: domain";
+  const results: string[] = [`🔄 اختبار نقل المنطقة DNS (AXFR): ${domain}\n${"─".repeat(40)}`];
+  try {
+    const ns = await Deno.resolveDns(domain, "NS");
+    results.push(`🏷️ خوادم DNS: ${ns.join(", ")}`);
+    for (const server of ns.slice(0, 3)) {
+      try {
+        const conn = await Deno.connect({ hostname: server.replace(/\.$/, ""), port: 53, transport: "tcp" });
+        conn.close();
+        results.push(`⚠️ ${server}: المنفذ 53 TCP مفتوح (قد يسمح بـ AXFR)`);
+      } catch {
+        results.push(`✅ ${server}: المنفذ 53 TCP مغلق (AXFR محمي)`);
+      }
+    }
+  } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.cloud_metadata_check = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const results: string[] = [`☁️ فحص تسرب بيانات السحابة: ${url}\n${"─".repeat(40)}`];
+  const endpoints = [
+    { name: "AWS Metadata", path: "/latest/meta-data/" },
+    { name: "GCP Metadata", path: "/computeMetadata/v1/" },
+    { name: "Azure Metadata", path: "/metadata/instance?api-version=2021-02-01" },
+    { name: "AWS Credentials", path: "/latest/meta-data/iam/security-credentials/" },
+    { name: "AWS User Data", path: "/latest/user-data/" },
+  ];
+  const base = url.replace(/\/+$/, "");
+  for (const ep of endpoints) {
+    try {
+      const resp = await fetch(`${base}${ep.path}`, { headers: { "Metadata-Flavor": "Google", "Metadata": "true" }, redirect: "manual" });
+      const status = resp.status;
+      if (status === 200) {
+        const text = await resp.text();
+        results.push(`🔴 ${ep.name}: متاح! (${status})`);
+        results.push(`  المحتوى: ${text.slice(0, 200)}`);
+      } else {
+        results.push(`✅ ${ep.name}: محمي (${status})`);
+        try { await resp.text(); } catch {}
+      }
+    } catch {
+      results.push(`✅ ${ep.name}: غير متاح`);
+    }
+  }
+  return results.join("\n");
+};
+
+tools.cve_search = async (args) => {
+  const { keyword } = args;
+  if (!keyword) return "❌ مطلوب: keyword";
+  const results: string[] = [`🔍 بحث CVE: ${keyword}\n${"─".repeat(40)}`];
+  try {
+    const resp = await fetch(`https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${encodeURIComponent(keyword)}&resultsPerPage=10`);
+    if (resp.ok) {
+      const data = await resp.json();
+      const total = data.totalResults || 0;
+      results.push(`📊 إجمالي النتائج: ${total}\n`);
+      const vulns = data.vulnerabilities || [];
+      for (const v of vulns.slice(0, 10)) {
+        const cve = v.cve;
+        const id = cve.id;
+        const desc = cve.descriptions?.find((d: any) => d.lang === "en")?.value || "لا يوجد وصف";
+        const severity = cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseSeverity || cve.metrics?.cvssMetricV2?.[0]?.cvssData?.baseSeverity || "غير محدد";
+        const score = cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore || cve.metrics?.cvssMetricV2?.[0]?.cvssData?.baseScore || "N/A";
+        results.push(`🔴 ${id} (${severity} - ${score})`);
+        results.push(`  ${desc.slice(0, 200)}\n`);
+      }
+    } else {
+      results.push(`❌ فشل البحث: ${resp.status}`);
+      await resp.text();
+    }
+  } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.screenshot_site = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  try {
+    const screenshotUrl = `https://image.thum.io/get/width/1280/crop/720/${encodeURIComponent(url)}`;
+    return `📸 لقطة شاشة لـ ${url}\n\n🔗 [عرض اللقطة](${screenshotUrl})`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {

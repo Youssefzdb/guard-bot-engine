@@ -203,20 +203,42 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   if (name === "telegram_send_photo") return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
   if (name === "send_file_to_user") {
     try {
-      const headResp = await fetch(args.file_url, { method: "HEAD" });
-      if (!headResp.ok) {
-        const getResp = await fetch(args.file_url, { headers: { "Range": "bytes=0-1023" } });
-        if (!getResp.ok) return `❌ فشل الوصول للملف: HTTP ${getResp.status}`;
-        const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
-        return `✅ 📎 **${args.file_name}**\n🔗 [⬇️ تحميل](${proxyUrl})`;
+      // Actually fetch a portion to verify the file is real and accessible
+      const verifyResp = await fetch(args.file_url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': '*/*',
+          'Range': 'bytes=0-4095',
+        },
+        redirect: 'follow',
+      });
+      
+      if (!verifyResp.ok && verifyResp.status !== 206) {
+        return `❌ فشل الوصول للملف: HTTP ${verifyResp.status} ${verifyResp.statusText}\nالرابط: ${args.file_url}\n⚠️ تأكد أن الرابط صحيح ومتاح للعموم.`;
       }
-      const contentLength = headResp.headers.get("content-length");
-      const contentType = headResp.headers.get("content-type") || "unknown";
-      const sizeStr = contentLength ? `${(parseInt(contentLength) / 1024 / 1024).toFixed(2)} MB` : "غير معروف";
-      if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) return `❌ حجم الملف (${sizeStr}) يتجاوز 50MB`;
+      
+      // Read the chunk to confirm it has actual content
+      const chunk = await verifyResp.arrayBuffer();
+      if (chunk.byteLength === 0) {
+        return `❌ الملف فارغ (0 bytes). الرابط: ${args.file_url}`;
+      }
+      
+      const contentType = verifyResp.headers.get("content-type") || "unknown";
+      const contentRange = verifyResp.headers.get("content-range");
+      let sizeStr = "غير معروف";
+      if (contentRange) {
+        const match = contentRange.match(/\/(\d+)/);
+        if (match) sizeStr = `${(parseInt(match[1]) / 1024 / 1024).toFixed(2)} MB`;
+      } else {
+        const cl = verifyResp.headers.get("content-length");
+        if (cl) sizeStr = `${(parseInt(cl) / 1024 / 1024).toFixed(2)} MB`;
+      }
+      
       const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
-      return `✅ 📎 **${args.file_name}** | ${contentType} | ${sizeStr}\n🔗 [⬇️ تحميل](${proxyUrl})`;
-    } catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
+      return `✅ تم التحقق من الملف (${chunk.byteLength} bytes أولية)\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n📏 الحجم: ${sizeStr}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
+    } catch (e) { 
+      return `❌ فشل الوصول للملف: ${e instanceof Error ? e.message : "خطأ"}\nالرابط: ${args.file_url}\n⚠️ قد يكون الرابط غير صالح أو محجوب.`; 
+    }
   }
   if (name === "add_custom_tool") return addCustomToolToDB(args);
 

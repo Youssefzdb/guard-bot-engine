@@ -64,11 +64,6 @@ const Index = () => {
   const handleToolResult = (result: string) => {
     setExecutionResults((prev) => [...prev, result]);
     setActiveTab("chat");
-    // Also add result as context to chat
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: `[نتيجة تنفيذ أداة أمنية]:\n${result}` },
-    ]);
   };
 
   return (

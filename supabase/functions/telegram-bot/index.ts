@@ -167,6 +167,57 @@ serve(async (req) => {
           return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
+        if (body._action === 'send_file') {
+          const { chat_id, file_url, caption, file_name } = body;
+          try {
+            // Download file from URL
+            const fileResp = await fetch(file_url);
+            if (!fileResp.ok) throw new Error(`Failed to download file: ${fileResp.status}`);
+            const fileBlob = await fileResp.blob();
+            const fileSize = fileBlob.size;
+            if (fileSize > 50 * 1024 * 1024) {
+              return new Response(JSON.stringify({ error: 'حجم الملف يتجاوز 50MB' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            }
+
+            const formData = new FormData();
+            formData.append('chat_id', String(chat_id));
+            formData.append('document', fileBlob, file_name || 'file');
+            if (caption) formData.append('caption', caption);
+
+            const res = await fetch(`${TELEGRAM_API}/sendDocument`, {
+              method: 'POST',
+              body: formData,
+            });
+            const data = await res.json();
+            return new Response(JSON.stringify({ success: data.ok, telegram_response: data, file_size: `${(fileSize / 1024 / 1024).toFixed(2)} MB` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        }
+
+        if (body._action === 'send_photo') {
+          const { chat_id, photo_url, caption } = body;
+          try {
+            const formData = new FormData();
+            formData.append('chat_id', String(chat_id));
+            
+            const photoResp = await fetch(photo_url);
+            if (!photoResp.ok) throw new Error(`Failed to download photo: ${photoResp.status}`);
+            const photoBlob = await photoResp.blob();
+            formData.append('photo', photoBlob, 'photo.jpg');
+            if (caption) formData.append('caption', caption);
+
+            const res = await fetch(`${TELEGRAM_API}/sendPhoto`, {
+              method: 'POST',
+              body: formData,
+            });
+            const data = await res.json();
+            return new Response(JSON.stringify({ success: data.ok, telegram_response: data }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        }
+
         return new Response(JSON.stringify({ error: 'Unknown action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 

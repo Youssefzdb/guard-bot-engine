@@ -19,6 +19,8 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 - يمكنك حذف أوامر باستخدام telegram_remove_command
 - يمكنك عرض الأوامر الحالية باستخدام telegram_list_commands
 - يمكنك فحص حالة البوت باستخدام telegram_bot_status
+- يمكنك إرسال ملفات (حتى 50MB) باستخدام telegram_send_file مع chat_id و file_url
+- يمكنك إرسال صور باستخدام telegram_send_photo مع chat_id و photo_url
 - عند إضافة أمر، response يدعم المتغيرات: {name} اسم المستخدم، {date} التاريخ، {time} الوقت، {args} النص بعد الأمر
 
 لديك أيضاً أداة لإضافة أدوات أمنية مخصصة جديدة للمحرك:
@@ -110,6 +112,12 @@ const aiTools = [
     { command: { type: "string", description: "اسم الأمر بدون /" } }, ["command"]),
   mkTool("telegram_list_commands", "عرض جميع أوامر بوت تيليجرام المخصصة", {}, []),
   mkTool("telegram_bot_status", "فحص حالة بوت تيليجرام ومعلومات Webhook", {}, []),
+  mkTool("telegram_send_file", "إرسال ملف (حتى 50MB) عبر بوت تيليجرام", 
+    { chat_id: { type: "string", description: "معرف المحادثة" }, file_url: { type: "string", description: "رابط الملف المراد إرساله" }, caption: { type: "string", description: "وصف الملف (اختياري)" }, file_name: { type: "string", description: "اسم الملف (اختياري)" } }, 
+    ["chat_id", "file_url"]),
+  mkTool("telegram_send_photo", "إرسال صورة عبر بوت تيليجرام", 
+    { chat_id: { type: "string", description: "معرف المحادثة" }, photo_url: { type: "string", description: "رابط الصورة" }, caption: { type: "string", description: "وصف الصورة (اختياري)" } }, 
+    ["chat_id", "photo_url"]),
   // CUSTOM TOOLS
   mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة للمحرك والترمينال", 
     { tool_id: { type: "string", description: "معرف الأداة بالإنجليزية" }, name_ar: { type: "string", description: "اسم الأداة بالعربية" }, 
@@ -191,6 +199,12 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
       });
       return JSON.stringify(await resp.json(), null, 2);
     } catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
+  }
+  if (name === "telegram_send_file") {
+    return executeTelegramAction("send_file", { chat_id: args.chat_id, file_url: args.file_url, caption: args.caption || "", file_name: args.file_name || "file" });
+  }
+  if (name === "telegram_send_photo") {
+    return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
   }
   if (name === "add_custom_tool") {
     return addCustomToolToDB(args.tool_id, args.name_ar, args.execution_type, args.config || "{}", args.args_def || "[]");

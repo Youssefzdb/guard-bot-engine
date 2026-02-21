@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Play, Loader2, ChevronDown, ChevronUp } from "lucide-react";
-import { securityTools, executeTool, categoryInfo, type SecurityTool, type ToolCategory } from "@/lib/security-tools";
+import { securityTools, executeTool, categoryInfo, getAllTools, type SecurityTool, type ToolCategory } from "@/lib/security-tools";
+import { getCustomTools, getCustomToolDefinitions } from "@/lib/custom-tools";
+import { AddToolDialog } from "@/components/AddToolDialog";
 
 interface ToolsPanelProps {
   onResult: (result: string) => void;
@@ -25,6 +27,11 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
   const [loading, setLoading] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, Record<string, string>>>({});
   const [activeCategory, setActiveCategory] = useState<ToolCategory>("scanning");
+  const [customToolsVersion, setCustomToolsVersion] = useState(0);
+
+  const customTools = getCustomTools();
+  const customDefs = getCustomToolDefinitions();
+  const allTools = getAllTools(customTools);
 
   const handleRun = async (tool: SecurityTool) => {
     const args = formData[tool.id] || {};
@@ -33,7 +40,11 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
 
     setLoading(tool.id);
     try {
-      const result = await executeTool(tool.id, args);
+      // Check if it's a custom tool
+      const customId = tool.id.replace("custom_", "");
+      const customDef = customDefs.find(d => d.id === customId);
+      const customConfig = customDef ? { executionType: customDef.executionType, executionConfig: customDef.executionConfig } : undefined;
+      const result = await executeTool(tool.id, args, customConfig);
       onResult(result);
     } catch (e) {
       onResult(`❌ خطأ: ${e instanceof Error ? e.message : "فشل التنفيذ"}`);
@@ -48,7 +59,11 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
     }));
   };
 
-  const filteredTools = securityTools.filter(t => t.category === activeCategory);
+  const handleToolsChanged = useCallback(() => {
+    setCustomToolsVersion(v => v + 1);
+  }, []);
+
+  const filteredTools = allTools.filter(t => t.category === activeCategory);
   const info = categoryInfo[activeCategory];
 
   return (
@@ -133,6 +148,9 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
           </div>
         ))}
       </div>
+
+      {/* Add custom tool button */}
+      <AddToolDialog onToolsChanged={handleToolsChanged} />
     </div>
   );
 }

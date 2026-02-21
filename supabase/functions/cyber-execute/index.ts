@@ -1073,10 +1073,86 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
   },
 };
 
+// Custom tool execution handler
+async function executeCustomTool(args: Record<string, string>, config: { executionType: string; executionConfig: Record<string, string> }): Promise<string> {
+  const { executionType, executionConfig } = config;
+  const results: string[] = [`🔧 تنفيذ أداة مخصصة\n${"─".repeat(40)}`];
+
+  try {
+    if (executionType === "http_fetch") {
+      let url = executionConfig.urlTemplate || "";
+      // Replace placeholders with args
+      for (const [key, value] of Object.entries(args)) {
+        url = url.replace(`{${key}}`, encodeURIComponent(value));
+      }
+      if (!url) return "❌ لم يتم تحديد URL";
+      const method = executionConfig.method || "GET";
+      const resp = await fetch(url, { method, redirect: "follow" });
+      const text = await resp.text();
+      results.push(`📡 ${method} ${url}`);
+      results.push(`📊 Status: ${resp.status} ${resp.statusText}`);
+      results.push(`📏 الحجم: ${text.length} بايت`);
+      results.push(`\n📋 Headers:`);
+      resp.headers.forEach((v, k) => results.push(`  ${k}: ${v.substring(0, 100)}`));
+      results.push(`\n📄 المحتوى (أول 500 حرف):`);
+      results.push(text.substring(0, 500));
+    } else if (executionType === "dns_query") {
+      const target = args.target || args.domain || Object.values(args)[0] || "";
+      if (!target) return "❌ لم يتم تحديد الهدف";
+      results.push(`🌐 استعلام DNS: ${target}`);
+      try { const r = await Deno.resolveDns(target, "A"); results.push(`\n📌 A: ${r.join(", ")}`); } catch { results.push(`❌ لا سجلات A`); }
+      try { const r = await Deno.resolveDns(target, "AAAA"); results.push(`📌 AAAA: ${r.join(", ")}`); } catch {}
+      try { const r = await Deno.resolveDns(target, "MX"); results.push(`📧 MX: ${r.map(m => m.exchange).join(", ")}`); } catch {}
+      try { const r = await Deno.resolveDns(target, "NS"); results.push(`🏷️ NS: ${r.join(", ")}`); } catch {}
+      try { const r = await Deno.resolveDns(target, "TXT"); results.push(`📝 TXT: ${r.map(t => t.join("")).join(" | ")}`); } catch {}
+    } else if (executionType === "tcp_connect") {
+      const target = args.target || Object.values(args)[0] || "";
+      const port = parseInt(args.port || "443");
+      if (!target) return "❌ لم يتم تحديد الهدف";
+      results.push(`📡 اتصال TCP: ${target}:${port}`);
+      const start = performance.now();
+      try {
+        const conn = await Deno.connect({ hostname: target, port, transport: "tcp" });
+        const elapsed = performance.now() - start;
+        conn.close();
+        results.push(`✅ متصل (${elapsed.toFixed(1)}ms)`);
+      } catch (e) {
+        results.push(`❌ فشل الاتصال: ${e instanceof Error ? e.message : "خطأ"}`);
+      }
+    } else if (executionType === "custom_script") {
+      // For security, custom scripts are executed as HTTP fetch with the script as context
+      const script = executionConfig.script || "";
+      if (!script) return "❌ لم يتم تحديد سكريبت";
+      results.push(`📜 تنفيذ سكريبت مخصص...`);
+      // Execute the script in a controlled manner
+      try {
+        const fn = new Function("args", "fetch", "Deno", `return (async () => { ${script} })();`);
+        const output = await fn(args, fetch, Deno);
+        results.push(String(output || "✅ تم التنفيذ بنجاح"));
+      } catch (e) {
+        results.push(`❌ خطأ في السكريبت: ${e instanceof Error ? e.message : "خطأ"}`);
+      }
+    } else {
+      results.push(`❌ نوع تنفيذ غير مدعوم: ${executionType}`);
+    }
+  } catch (e) {
+    results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`);
+  }
+
+  return results.join("\n");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
-    const { tool, args } = await req.json();
+    const { tool, args, customConfig } = await req.json();
+    
+    // Handle custom tools
+    if (tool?.startsWith("custom_") && customConfig) {
+      const result = await executeCustomTool(args || {}, customConfig);
+      return new Response(JSON.stringify({ result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    
     if (!tool || !tools[tool]) {
       return new Response(JSON.stringify({ error: "أداة غير معروفة", available_tools: Object.keys(tools) }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });

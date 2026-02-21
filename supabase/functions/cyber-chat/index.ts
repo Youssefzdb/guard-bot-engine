@@ -22,293 +22,75 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 5. أجب بلغة المستخدم
 6. بعد تنفيذ الأدوات، قدم تحليلاً مختصراً للنتائج`;
 
-// Define all available tools for function calling
+const mkTool = (name: string, desc: string, props: Record<string, any>, required: string[] = []) => ({
+  type: "function",
+  function: { name, description: desc, parameters: { type: "object", properties: props, required } },
+});
+
 const aiTools = [
-  {
-    type: "function",
-    function: {
-      name: "port_scan",
-      description: "فحص المنافذ المفتوحة في هدف معين",
-      parameters: {
-        type: "object",
-        properties: {
-          target: { type: "string", description: "الهدف (domain أو IP)" },
-          ports: { type: "string", description: "المنافذ مفصولة بفاصلة مثل 80,443,22,21,25,3306,8080" },
-        },
-        required: ["target", "ports"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "dns_lookup",
-      description: "استعلام جميع سجلات DNS لنطاق",
-      parameters: {
-        type: "object",
-        properties: {
-          domain: { type: "string", description: "النطاق" },
-        },
-        required: ["domain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "http_headers",
-      description: "تحليل headers الأمنية لموقع ويب",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "رابط الموقع مع https://" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "ssl_check",
-      description: "فحص شهادة SSL وإعدادات HTTPS",
-      parameters: {
-        type: "object",
-        properties: {
-          domain: { type: "string", description: "النطاق" },
-        },
-        required: ["domain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "whois",
-      description: "استعلام معلومات النطاق",
-      parameters: {
-        type: "object",
-        properties: {
-          domain: { type: "string", description: "النطاق" },
-        },
-        required: ["domain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "tech_detect",
-      description: "كشف التقنيات والأطر المستخدمة في موقع",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "رابط الموقع مع https://" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "email_security",
-      description: "فحص SPF, DKIM, DMARC لنطاق",
-      parameters: {
-        type: "object",
-        properties: {
-          domain: { type: "string", description: "النطاق" },
-        },
-        required: ["domain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "dir_bruteforce",
-      description: "اكتشاف مجلدات وملفات مخفية في موقع",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "رابط الموقع" },
-          wordlist: { type: "string", description: "كلمات البحث مفصولة بفاصلة (اختياري)" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "sqli_test",
-      description: "اختبار حقن SQL على رابط معين",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "الرابط مع المعامل مثل https://example.com/page?id=1" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "xss_test",
-      description: "اختبار ثغرة Cross-Site Scripting",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "الرابط مع المعامل" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "subdomain_enum",
-      description: "اكتشاف النطاقات الفرعية لنطاق",
-      parameters: {
-        type: "object",
-        properties: {
-          domain: { type: "string", description: "النطاق" },
-        },
-        required: ["domain"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "cors_test",
-      description: "اختبار إعدادات CORS",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "الرابط" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "open_redirect",
-      description: "اختبار ثغرة إعادة التوجيه المفتوحة",
-      parameters: {
-        type: "object",
-        properties: {
-          url: { type: "string", description: "الرابط" },
-        },
-        required: ["url"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "reverse_dns",
-      description: "استعلام DNS عكسي لعنوان IP",
-      parameters: {
-        type: "object",
-        properties: {
-          ip: { type: "string", description: "عنوان IP" },
-        },
-        required: ["ip"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "ping_check",
-      description: "فحص توفر خدمة على منفذ معين",
-      parameters: {
-        type: "object",
-        properties: {
-          target: { type: "string", description: "الهدف" },
-          port: { type: "string", description: "المنفذ (افتراضي 443)" },
-        },
-        required: ["target"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "hash",
-      description: "توليد hash للنصوص",
-      parameters: {
-        type: "object",
-        properties: {
-          text: { type: "string", description: "النص" },
-          algorithm: { type: "string", description: "الخوارزمية (SHA-256, ALL)" },
-        },
-        required: ["text"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "password_strength",
-      description: "تحليل قوة كلمة المرور",
-      parameters: {
-        type: "object",
-        properties: {
-          password: { type: "string", description: "كلمة المرور" },
-        },
-        required: ["password"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "generate_password",
-      description: "توليد كلمات مرور آمنة",
-      parameters: {
-        type: "object",
-        properties: {
-          length: { type: "string", description: "الطول" },
-          count: { type: "string", description: "العدد" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "base64",
-      description: "ترميز وفك ترميز Base64",
-      parameters: {
-        type: "object",
-        properties: {
-          text: { type: "string", description: "النص" },
-          mode: { type: "string", description: "encode أو decode" },
-        },
-        required: ["text"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "jwt_decode",
-      description: "فك وتحليل JWT tokens",
-      parameters: {
-        type: "object",
-        properties: {
-          token: { type: "string", description: "JWT Token" },
-        },
-        required: ["token"],
-      },
-    },
-  },
+  // SCANNING
+  mkTool("port_scan", "فحص المنافذ المفتوحة", { target: { type: "string" }, ports: { type: "string" } }, ["target", "ports"]),
+  mkTool("dns_lookup", "استعلام سجلات DNS", { domain: { type: "string" } }, ["domain"]),
+  mkTool("http_headers", "تحليل headers الأمنية", { url: { type: "string" } }, ["url"]),
+  mkTool("ssl_check", "فحص شهادة SSL", { domain: { type: "string" } }, ["domain"]),
+  mkTool("whois", "معلومات النطاق", { domain: { type: "string" } }, ["domain"]),
+  mkTool("subnet_calc", "حاسبة الشبكة الفرعية", { cidr: { type: "string" } }, ["cidr"]),
+  mkTool("tech_detect", "كشف التقنيات المستخدمة", { url: { type: "string" } }, ["url"]),
+  mkTool("email_security", "فحص أمان البريد SPF/DKIM/DMARC", { domain: { type: "string" } }, ["domain"]),
+  mkTool("reverse_dns", "DNS عكسي", { ip: { type: "string" } }, ["ip"]),
+  mkTool("ping_check", "فحص توفر خدمة", { target: { type: "string" }, port: { type: "string" } }, ["target"]),
+  mkTool("traceroute", "تتبع مسار الشبكة", { target: { type: "string" } }, ["target"]),
+  mkTool("geo_ip", "تحديد الموقع الجغرافي لـ IP", { ip: { type: "string" } }, ["ip"]),
+  mkTool("asn_lookup", "معرفة ASN ومزود الخدمة", { ip: { type: "string" } }, ["ip"]),
+  mkTool("robots_check", "تحليل robots.txt", { url: { type: "string" } }, ["url"]),
+  mkTool("sitemap_check", "تحليل sitemap.xml", { url: { type: "string" } }, ["url"]),
+  mkTool("cookie_analyzer", "تحليل كوكيز الموقع", { url: { type: "string" } }, ["url"]),
+  mkTool("cms_detect", "كشف نظام إدارة المحتوى", { url: { type: "string" } }, ["url"]),
+  mkTool("waf_detect", "كشف جدار الحماية WAF", { url: { type: "string" } }, ["url"]),
+  mkTool("link_extractor", "استخراج الروابط من صفحة", { url: { type: "string" } }, ["url"]),
+  mkTool("js_file_scanner", "فحص ملفات JS واستخراج endpoints", { url: { type: "string" } }, ["url"]),
+  // OFFENSIVE
+  mkTool("dir_bruteforce", "اكتشاف مجلدات مخفية", { url: { type: "string" }, wordlist: { type: "string" } }, ["url"]),
+  mkTool("sqli_test", "اختبار SQL Injection", { url: { type: "string" } }, ["url"]),
+  mkTool("xss_test", "اختبار XSS", { url: { type: "string" } }, ["url"]),
+  mkTool("subdomain_enum", "تعداد النطاقات الفرعية", { domain: { type: "string" } }, ["domain"]),
+  mkTool("cors_test", "اختبار إعدادات CORS", { url: { type: "string" } }, ["url"]),
+  mkTool("open_redirect", "اختبار Open Redirect", { url: { type: "string" } }, ["url"]),
+  mkTool("lfi_test", "اختبار Local File Inclusion", { url: { type: "string" } }, ["url"]),
+  mkTool("rfi_test", "اختبار Remote File Inclusion", { url: { type: "string" } }, ["url"]),
+  mkTool("ssrf_test", "اختبار SSRF", { url: { type: "string" } }, ["url"]),
+  mkTool("crlf_test", "اختبار CRLF Injection", { url: { type: "string" } }, ["url"]),
+  mkTool("clickjacking_test", "اختبار Clickjacking", { url: { type: "string" } }, ["url"]),
+  mkTool("host_header_injection", "اختبار Host Header Injection", { url: { type: "string" } }, ["url"]),
+  mkTool("http_methods_test", "اكتشاف HTTP Methods المسموحة", { url: { type: "string" } }, ["url"]),
+  mkTool("param_discovery", "اكتشاف معاملات URL المخفية", { url: { type: "string" } }, ["url"]),
+  mkTool("path_traversal", "اختبار Path Traversal", { url: { type: "string" } }, ["url"]),
+  mkTool("ssti_test", "اختبار Server-Side Template Injection", { url: { type: "string" } }, ["url"]),
+  mkTool("xxe_test", "اختبار XML External Entity", { url: { type: "string" } }, ["url"]),
+  mkTool("nosql_test", "اختبار NoSQL Injection", { url: { type: "string" } }, ["url"]),
+  mkTool("api_fuzzer", "فحص نقاط نهاية API", { url: { type: "string" } }, ["url"]),
+  mkTool("subdomain_takeover", "فحص استيلاء على النطاقات الفرعية", { domain: { type: "string" } }, ["domain"]),
+  // DEFENSIVE
+  mkTool("hash", "توليد hash للنصوص", { text: { type: "string" }, algorithm: { type: "string" } }, ["text"]),
+  mkTool("password_strength", "تحليل قوة كلمة المرور", { password: { type: "string" } }, ["password"]),
+  mkTool("generate_password", "توليد كلمات مرور آمنة", { length: { type: "string" }, count: { type: "string" } }),
+  mkTool("base64", "ترميز/فك Base64", { text: { type: "string" }, mode: { type: "string" } }, ["text"]),
+  mkTool("jwt_decode", "فك JWT tokens", { token: { type: "string" } }, ["token"]),
+  mkTool("url_encode", "ترميز/فك URL", { text: { type: "string" }, mode: { type: "string" } }, ["text"]),
+  mkTool("hash_identify", "تحديد نوع Hash", { hash: { type: "string" } }, ["hash"]),
+  mkTool("csp_generator", "توليد Content-Security-Policy", { url: { type: "string" } }, ["url"]),
+  mkTool("hex_converter", "تحويل بين نص و Hex", { text: { type: "string" }, mode: { type: "string" } }, ["text"]),
+  mkTool("timestamp_convert", "تحويل Unix timestamp", { value: { type: "string" } }, ["value"]),
+  mkTool("ip_converter", "تحويل IP بين أنظمة العد", { ip: { type: "string" } }, ["ip"]),
+  mkTool("cidr_calculator", "حاسبة نطاق CIDR", { cidr: { type: "string" } }, ["cidr"]),
+  mkTool("html_encode", "ترميز/فك HTML entities", { text: { type: "string" }, mode: { type: "string" } }, ["text"]),
+  mkTool("uuid_generator", "توليد UUID عشوائية", { count: { type: "string" } }),
+  mkTool("regex_tester", "اختبار تعبير نمطي", { pattern: { type: "string" }, text: { type: "string" } }, ["pattern", "text"]),
+  mkTool("ssl_cert_generator", "توليد أوامر شهادة SSL ذاتية التوقيع", { domain: { type: "string" }, days: { type: "string" } }, ["domain"]),
+  mkTool("htaccess_generator", "توليد قواعد .htaccess أمنية", { features: { type: "string" } }),
+  mkTool("cors_header_generator", "توليد CORS headers آمنة", { origin: { type: "string" }, methods: { type: "string" } }, ["origin"]),
+  mkTool("encryption_tool", "تشفير/فك AES", { text: { type: "string" }, key: { type: "string" }, mode: { type: "string" } }, ["text", "key"]),
+  mkTool("security_checklist", "قائمة تحقق أمنية شاملة", { url: { type: "string" } }, ["url"]),
 ];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -318,10 +100,7 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   try {
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/cyber-execute`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
       body: JSON.stringify({ tool: name, args }),
     });
     const data = await resp.json();
@@ -341,145 +120,84 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    const aiMessages = [
-      { role: "system", content: SYSTEM_PROMPT },
-      ...messages,
-    ];
+    const aiMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
 
-    // Step 1: Call AI with tools (non-streaming) to check for tool calls
+    // Step 1: Call AI with tools (non-streaming)
     const firstResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: aiMessages,
-        tools: aiTools,
-        stream: false,
-      }),
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: aiMessages, tools: aiTools, stream: false }),
     });
 
     if (!firstResponse.ok) {
-      if (firstResponse.status === 429) {
-        return new Response(JSON.stringify({ error: "تم تجاوز حد الطلبات، يرجى المحاولة لاحقاً." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (firstResponse.status === 402) {
-        return new Response(JSON.stringify({ error: "يرجى إضافة رصيد للاستمرار." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+      if (firstResponse.status === 429) return new Response(JSON.stringify({ error: "تم تجاوز حد الطلبات" }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (firstResponse.status === 402) return new Response(JSON.stringify({ error: "يرجى إضافة رصيد" }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       const t = await firstResponse.text();
-      console.error("AI gateway error:", firstResponse.status, t);
-      return new Response(JSON.stringify({ error: "خطأ في الاتصال بالذكاء الاصطناعي" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      console.error("AI error:", firstResponse.status, t);
+      return new Response(JSON.stringify({ error: "خطأ في الاتصال بالذكاء الاصطناعي" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const firstData = await firstResponse.json();
     const choice = firstData.choices?.[0];
 
-    // If no tool calls, just return the text content as a stream-like SSE
     if (!choice?.message?.tool_calls || choice.message.tool_calls.length === 0) {
       const content = choice?.message?.content || "لم أستطع الإجابة.";
-      // Return as SSE format for frontend compatibility
       const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`;
-      return new Response(sseData, {
-        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-      });
+      return new Response(sseData, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
     }
 
     // Step 2: Execute tool calls
     const toolCalls = choice.message.tool_calls;
     const toolResults: { tool_call_id: string; name: string; result: string }[] = [];
-
-    // Send initial SSE telling user tools are being executed
     const encoder = new TextEncoder();
+
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          // Send "executing tools" message
           const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
-          const execMsg = `⚡ **جاري تنفيذ الأدوات:** ${toolNames}\n\n`;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: execMsg } }] })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `⚡ **جاري تنفيذ الأدوات:** ${toolNames}\n\n` } }] })}\n\n`));
 
-          // Execute all tool calls
           for (const tc of toolCalls) {
             const fnName = tc.function.name;
             let fnArgs: Record<string, string> = {};
-            try {
-              fnArgs = JSON.parse(tc.function.arguments || "{}");
-            } catch { fnArgs = {}; }
-
+            try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
             const result = await executeToolCall(fnName, fnArgs);
             toolResults.push({ tool_call_id: tc.id, name: fnName, result });
-
-            // Stream each tool result
-            const resultMsg = `\n---\n📌 **${fnName}:**\n\`\`\`\n${result}\n\`\`\`\n`;
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: resultMsg } }] })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `\n---\n📌 **${fnName}:**\n\`\`\`\n${result}\n\`\`\`\n` } }] })}\n\n`));
           }
 
-          // Step 3: Send results back to AI for analysis
+          // Step 3: AI analysis
           const analysisMessages = [
-            ...aiMessages,
-            choice.message,
-            ...toolResults.map((tr) => ({
-              role: "tool",
-              tool_call_id: tr.tool_call_id,
-              content: tr.result,
-            })),
+            ...aiMessages, choice.message,
+            ...toolResults.map((tr) => ({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result })),
           ];
 
           const analysisResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${LOVABLE_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "google/gemini-3-flash-preview",
-              messages: analysisMessages,
-              stream: true,
-            }),
+            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: analysisMessages, stream: true }),
           });
 
           if (analysisResponse.ok && analysisResponse.body) {
-            // Add separator before analysis
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "\n\n---\n📊 **التحليل:**\n" } }] })}\n\n`));
-
             const reader = analysisResponse.body.getReader();
-            const decoder = new TextDecoder();
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              controller.enqueue(value);
-            }
+            while (true) { const { done, value } = await reader.read(); if (done) break; controller.enqueue(value); }
           }
 
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         } catch (e) {
           console.error("Stream error:", e);
-          const errMsg = `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: errMsg } }] })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}` } }] })}\n\n`));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
           controller.close();
         }
       },
     });
 
-    return new Response(stream, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
+    return new Response(stream, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
   } catch (e) {
     console.error("chat error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "خطأ غير معروف" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "خطأ" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });

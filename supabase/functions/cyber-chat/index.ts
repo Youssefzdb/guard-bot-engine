@@ -257,6 +257,15 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
 }
 
 const MAX_ROUNDS = 5;
+const TIME_BUDGET_MS = 120_000; // 120s budget (edge fn limit ~150s)
+const TOOL_TIMEOUT_MS = 25_000; // 25s per tool max
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`⏱️ انتهت مهلة ${label} (${ms / 1000}s)`)), ms)),
+  ]);
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -271,100 +280,129 @@ serve(async (req) => {
 
     const stream = new ReadableStream({
       async start(controller) {
+        let closed = false;
+        const safeEnqueue = (chunk: Uint8Array) => {
+          if (closed) return;
+          try { controller.enqueue(chunk); } catch { closed = true; }
+        };
+        const safeClose = () => {
+          if (closed) return;
+          closed = true;
+          try { controller.close(); } catch { /* already closed */ }
+        };
+        const send = (text: string) => safeEnqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`));
+
+        const startTime = Date.now();
+        const timeLeft = () => TIME_BUDGET_MS - (Date.now() - startTime);
+
         try {
           let round = 0;
           let conversationMessages = [...aiMessages];
 
           while (round < MAX_ROUNDS) {
+            if (closed || timeLeft() < 15_000) {
+              if (!closed) send("\n\n⏱️ انتهى الوقت المتاح، جاري تقديم التقرير...\n");
+              break;
+            }
             round++;
 
-            // Call AI with tools (non-streaming)
-            const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: conversationMessages, tools: aiTools, stream: false }),
-            });
+            const aiResponse = await withTimeout(
+              fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: conversationMessages, tools: aiTools, stream: false }),
+              }),
+              Math.min(30_000, timeLeft()),
+              "طلب AI"
+            );
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;
-              if (status === 429) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "⚠️ تم تجاوز حد الطلبات، يرجى الانتظار..." } }] })}\n\n`)); break; }
-              if (status === 402) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "⚠️ يرجى إضافة رصيد" } }] })}\n\n`)); break; }
-              console.error("AI error:", status);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "❌ خطأ في الاتصال بالذكاء الاصطناعي" } }] })}\n\n`));
-              break;
+              if (status === 429) { send("⚠️ تم تجاوز حد الطلبات، يرجى الانتظار..."); break; }
+              if (status === 402) { send("⚠️ يرجى إضافة رصيد"); break; }
+              send("❌ خطأ في الاتصال بالذكاء الاصطناعي"); break;
             }
 
             const aiData = await aiResponse.json();
-            const choice = aiData.choices?.[0];
-            const assistantMsg = choice?.message;
+            const assistantMsg = aiData.choices?.[0]?.message;
 
             if (!assistantMsg?.tool_calls || assistantMsg.tool_calls.length === 0) {
-              // No more tool calls - AI wants to respond with text (final analysis)
-              const content = assistantMsg?.content || "";
-              if (content) {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`));
-              }
-              break; // Exit loop - AI is done
+              if (assistantMsg?.content) send(assistantMsg.content);
+              break;
             }
 
-            // Has tool calls - execute them
             const toolCalls = assistantMsg.tool_calls;
             const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
-            
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `\n⚡ **الجولة ${round} - تنفيذ:** ${toolNames}\n\n` } }] })}\n\n`));
+            send(`\n⚡ **الجولة ${round} - تنفيذ:** ${toolNames}\n\n`);
 
-            // Execute all tool calls in parallel
-            const toolPromises = toolCalls.map(async (tc: any) => {
-              const fnName = tc.function.name;
-              let fnArgs: Record<string, string> = {};
-              try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
-              const result = await executeToolCall(fnName, fnArgs);
-              return { tool_call_id: tc.id, name: fnName, result };
-            });
+            // Execute all tool calls in parallel with timeout
+            const toolResults = await Promise.all(
+              toolCalls.map(async (tc: any) => {
+                const fnName = tc.function.name;
+                let fnArgs: Record<string, string> = {};
+                try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
+                try {
+                  const result = await withTimeout(executeToolCall(fnName, fnArgs), TOOL_TIMEOUT_MS, fnName);
+                  return { tool_call_id: tc.id, name: fnName, result };
+                } catch (e) {
+                  return { tool_call_id: tc.id, name: fnName, result: `❌ ${e instanceof Error ? e.message : "فشل"}` };
+                }
+              })
+            );
 
-            const toolResults = await Promise.all(toolPromises);
+            if (closed) break;
 
-            // Stream each result to user
             for (const tr of toolResults) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 1500)}\n\`\`\`\n` } }] })}\n\n`));
+              send(`📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 1500)}\n\`\`\`\n`);
             }
 
-            // Add assistant message and tool results to conversation for next round
             conversationMessages.push(assistantMsg);
             for (const tr of toolResults) {
               conversationMessages.push({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result });
             }
-
-            // Continue loop - AI will decide if more tools are needed
           }
 
-          // If we exited due to max rounds, get final analysis
-          if (round >= MAX_ROUNDS) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "\n\n---\n📊 **التحليل النهائي:**\n" } }] })}\n\n`));
-            
-            const finalResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ 
-                model: "google/gemini-3-flash-preview", 
-                messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. لا تستخدم أدوات." }], 
-                stream: true 
-              }),
-            });
+          // Final analysis if we did tool calls
+          if (!closed && round > 0 && timeLeft() > 10_000) {
+            if (round >= MAX_ROUNDS) {
+              send("\n\n---\n📊 **التحليل النهائي:**\n");
+            }
 
-            if (finalResponse.ok && finalResponse.body) {
-              const reader = finalResponse.body.getReader();
-              while (true) { const { done, value } = await reader.read(); if (done) break; controller.enqueue(value); }
+            try {
+              const finalResponse = await withTimeout(
+                fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    model: "google/gemini-3-flash-preview",
+                    messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. لا تستخدم أدوات. كن مختصراً." }],
+                    stream: true,
+                  }),
+                }),
+                Math.min(30_000, timeLeft()),
+                "التحليل النهائي"
+              );
+
+              if (finalResponse.ok && finalResponse.body) {
+                const reader = finalResponse.body.getReader();
+                while (!closed) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  safeEnqueue(value);
+                }
+              }
+            } catch (e) {
+              send(`\n⚠️ تعذر إتمام التحليل النهائي: ${e instanceof Error ? e.message : "خطأ"}`);
             }
           }
 
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
+          safeEnqueue(encoder.encode("data: [DONE]\n\n"));
+          safeClose();
         } catch (e) {
           console.error("Stream error:", e);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}` } }] })}\n\n`));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
+          send(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`);
+          safeEnqueue(encoder.encode("data: [DONE]\n\n"));
+          safeClose();
         }
       },
     });

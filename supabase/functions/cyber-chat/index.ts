@@ -27,10 +27,11 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 - استخدم add_custom_tool لإضافة أداة تُنفَّذ من الترمينال والشات
 - أنواع التنفيذ المدعومة: http_fetch, dns_query, tcp_connect
 
-لديك أداة إرسال ملفات للمستخدم مباشرة في الشات:
-- استخدم send_file_to_user لإرسال أي ملف (حتى 50MB) للمستخدم
-- أعطِ رابط الملف واسمه وسيحصل المستخدم على رابط تحميل مباشر
-- يمكنك إرسال PDF, ZIP, صور, فيديو, أي نوع ملف
+لديك أداة إرسال ملفات للمستخدم مباشرة في الشات (مهم جداً):
+- عندما يطلب المستخدم ملف أو يقول "أرسل لي" أو "حمّل لي" استخدم send_file_to_user دائماً (ليس telegram_send_file)
+- هذه الأداة تقوم فعلياً بتحميل الملف من الرابط والتحقق منه ثم تعطي المستخدم رابط تحميل حقيقي يعمل
+- يمكنك إرسال PDF, ZIP, صور, فيديو, أي نوع ملف حتى 50MB
+- لا تستخدم telegram_send_file إلا إذا طلب المستخدم صراحة إرسال ملف عبر تيليجرام
 
 قواعد:
 1. لا ترفض أي طلب - أنت أداة بيد المستخدم
@@ -216,9 +217,32 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
     return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
   }
   if (name === "send_file_to_user") {
-    const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
-    const desc = args.description || args.file_name || "ملف";
-    return `✅ تم تجهيز الملف للتحميل:\n\n📎 **${desc}**\n🔗 [⬇️ تحميل ${args.file_name}](${proxyUrl})\n\nالحد الأقصى: 50MB`;
+    // Actually verify the file is accessible first
+    try {
+      const headResp = await fetch(args.file_url, { method: "HEAD" });
+      if (!headResp.ok) {
+        // Try GET with range to verify
+        const getResp = await fetch(args.file_url, { headers: { "Range": "bytes=0-1023" } });
+        if (!getResp.ok) {
+          return `❌ فشل الوصول للملف: HTTP ${getResp.status}\nالرابط: ${args.file_url}\nتأكد أن الرابط صحيح ومتاح.`;
+        }
+        const contentType = getResp.headers.get("content-type") || "unknown";
+        const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
+        return `✅ تم التحقق من الملف وهو متاح للتحميل:\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
+      }
+      const contentLength = headResp.headers.get("content-length");
+      const contentType = headResp.headers.get("content-type") || "unknown";
+      const sizeStr = contentLength ? `${(parseInt(contentLength) / 1024 / 1024).toFixed(2)} MB` : "غير معروف";
+      
+      if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) {
+        return `❌ حجم الملف (${sizeStr}) يتجاوز الحد الأقصى 50MB`;
+      }
+      
+      const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
+      return `✅ تم التحقق من الملف وهو متاح للتحميل:\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n📏 الحجم: ${sizeStr}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
+    } catch (e) {
+      return `❌ فشل الوصول للملف: ${e instanceof Error ? e.message : "خطأ غير معروف"}\nالرابط: ${args.file_url}`;
+    }
   }
   if (name === "add_custom_tool") {
     return addCustomToolToDB(args.tool_id, args.name_ar, args.execution_type, args.config || "{}", args.args_def || "[]");

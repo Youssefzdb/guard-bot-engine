@@ -325,6 +325,32 @@ export const securityTools: SecurityTool[] = [
     description: "فحص قائمة تحقق أمنية شاملة لموقع",
     args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
   },
+  // ========== NEW ADVANCED TOOLS ==========
+  {
+    id: "security_txt_check", name: "Security.txt Check", nameAr: "فحص Security.txt", icon: "🔐", category: "scanning",
+    description: "فحص ملف security.txt للموقع",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+  {
+    id: "dns_zone_transfer", name: "DNS Zone Transfer", nameAr: "اختبار نقل المنطقة", icon: "🔄", category: "scanning",
+    description: "اختبار نقل منطقة DNS (AXFR)",
+    args: [{ key: "domain", label: "النطاق", placeholder: "example.com", required: true }],
+  },
+  {
+    id: "cloud_metadata_check", name: "Cloud Metadata Check", nameAr: "فحص بيانات السحابة", icon: "☁️", category: "scanning",
+    description: "فحص تسرب بيانات السحابة (AWS/GCP/Azure)",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+  {
+    id: "cve_search", name: "CVE Search", nameAr: "بحث ثغرات CVE", icon: "🔍", category: "scanning",
+    description: "البحث عن ثغرات CVE معروفة لتقنية معينة",
+    args: [{ key: "keyword", label: "الكلمة المفتاحية", placeholder: "Apache 2.4", required: true }],
+  },
+  {
+    id: "screenshot_site", name: "Website Screenshot", nameAr: "لقطة شاشة الموقع", icon: "📸", category: "scanning",
+    description: "التقاط صورة لموقع ويب",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
 ];
 
 const EXEC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cyber-execute`;

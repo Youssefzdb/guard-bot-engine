@@ -1,15 +1,43 @@
 import ReactMarkdown from "react-markdown";
 import { Shield, User, Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { ChatMessage as ChatMsg } from "@/lib/chat-stream";
+import { SecurityScore } from "@/components/SecurityScore";
+import { ScanProgressBar } from "@/components/ScanProgressBar";
 
 interface ChatMessageProps {
   message: ChatMsg;
   isStreaming?: boolean;
 }
 
+function parseSecurityScore(content: string): number | null {
+  const match = content.match(/<!--SECURITY_SCORE:(\d+)-->/);
+  return match ? parseInt(match[1]) : null;
+}
+
+function parseProgress(content: string): { round: number; max: number; timeLeft: number; tools: string[] } | null {
+  const progressMatch = content.match(/<!--PROGRESS:(\d+)\/(\d+):(\d+)-->/);
+  if (!progressMatch) return null;
+  const toolMatches = content.match(/⚡ \*\*الجولة \d+ - تنفيذ:\*\* (.+)/g) || [];
+  const tools = toolMatches.flatMap(m => {
+    const inner = m.match(/تنفيذ:\*\* (.+)/);
+    return inner ? inner[1].split(", ") : [];
+  });
+  return { round: parseInt(progressMatch[1]), max: parseInt(progressMatch[2]), timeLeft: parseInt(progressMatch[3]), tools };
+}
+
 export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   const isUser = message.role === "user";
+  const securityScore = useMemo(() => parseSecurityScore(message.content), [message.content]);
+  const progress = useMemo(() => isStreaming ? parseProgress(message.content) : null, [message.content, isStreaming]);
+  
+  // Clean hidden tags from display
+  const displayContent = useMemo(() => 
+    message.content
+      .replace(/<!--SECURITY_SCORE:\d+-->/g, "")
+      .replace(/<!--PROGRESS:\d+\/\d+:\d+-->/g, ""),
+    [message.content]
+  );
 
   return (
     <div className={`flex gap-3 animate-matrix-fade ${isUser ? "flex-row-reverse" : ""}`}>
@@ -38,6 +66,14 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
           <p className="text-sm text-foreground whitespace-pre-wrap">{message.content}</p>
         ) : (
           <div className="prose prose-sm prose-invert max-w-none text-card-foreground">
+            {progress && isStreaming && (
+              <ScanProgressBar
+                currentRound={progress.round}
+                maxRounds={progress.max}
+                timeLeft={progress.timeLeft}
+                toolsExecuted={progress.tools}
+              />
+            )}
             <ReactMarkdown
               components={{
                 a({ href, children, ...props }) {
@@ -76,8 +112,9 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
                 },
               }}
             >
-              {message.content}
+              {displayContent}
             </ReactMarkdown>
+            {securityScore !== null && <SecurityScore score={securityScore} />}
             {isStreaming && (
               <span className="inline-block w-2 h-4 bg-primary ml-1 animate-typing-cursor" />
             )}
@@ -88,6 +125,7 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
   );
 }
 
+// ... keep existing code (CodeBlock component)
 function CodeBlock({ children, language }: { children: string; language: string }) {
   const [copied, setCopied] = useState(false);
 

@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.file-proxy]
 verify_jwt = false
+
+[functions.monitor-check]
+verify_jwt = false

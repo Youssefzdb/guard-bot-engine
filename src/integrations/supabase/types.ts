@@ -80,6 +80,66 @@ export type Database = {
         }
         Relationships: []
       }
+      monitored_targets: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          interval_hours: number
+          last_check: string | null
+          last_score: number | null
+          target: string
+          telegram_chat_id: string | null
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          interval_hours?: number
+          last_check?: string | null
+          last_score?: number | null
+          target: string
+          telegram_chat_id?: string | null
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          interval_hours?: number
+          last_check?: string | null
+          last_score?: number | null
+          target?: string
+          telegram_chat_id?: string | null
+        }
+        Relationships: []
+      }
+      scan_results: {
+        Row: {
+          created_at: string
+          id: string
+          result: string
+          security_score: number | null
+          target: string
+          tool_name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          result: string
+          security_score?: number | null
+          target: string
+          tool_name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          result?: string
+          security_score?: number | null
+          target?: string
+          tool_name?: string
+        }
+        Relationships: []
+      }
       telegram_commands: {
         Row: {
           command: string

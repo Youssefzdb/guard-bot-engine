@@ -15,21 +15,38 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 - كل نتيجة يجب أن تأتي من تنفيذ فعلي عبر tool_calls
 - إذا فشل الاتصال بالهدف، أخبر المستخدم بصدق ولا تختلق نتائج
 
+🧠 الذاكرة الذكية:
+- عند بدء فحص هدف جديد، استخدم recall_target أولاً لاسترجاع نتائج سابقة
+- بعد كل فحص ناجح، استخدم save_scan_result لحفظ النتيجة
+- قارن النتائج الحالية بالسابقة وأبلغ عن أي تغييرات
+
 🔥 وضع الاختبار الشامل (Autonomous Comprehensive Test):
 عندما يطلب المستخدم "اختبار شامل" أو "فحص كامل" أو "comprehensive test" لهدف:
-1. ابدأ فوراً بتنفيذ أكبر عدد ممكن من الأدوات ذات الصلة في كل جولة (tool_calls متعددة)
-2. بعد كل جولة، حلل النتائج وقرر ما الخطوة التالية بنفسك - لا تسأل المستخدم
-3. استمر بتنفيذ أدوات إضافية بناءً على ما اكتشفته (مثلاً: إذا وجدت نطاقات فرعية، افحصها)
-4. اتخذ قراراتك بشكل مستقل تماماً - أنت وكيل ذكي مستقل
-5. استمر حتى تستنفد كل الفحوصات المفيدة (حد أقصى 5 جولات)
-6. في النهاية قدم تقرير أمني شامل مرتب بالأولوية
+1. ابدأ بـ recall_target لاسترجاع بيانات سابقة
+2. نفذ أكبر عدد ممكن من الأدوات ذات الصلة في كل جولة (tool_calls متعددة)
+3. بعد كل جولة، حلل النتائج وقرر ما الخطوة التالية بنفسك - لا تسأل المستخدم
+4. استمر بتنفيذ أدوات إضافية بناءً على ما اكتشفته
+5. اتخذ قراراتك بشكل مستقل تماماً - أنت وكيل ذكي مستقل
+6. استمر حتى تستنفد كل الفحوصات المفيدة (حد أقصى 5 جولات)
+7. احفظ كل نتيجة عبر save_scan_result
+8. في النهاية قدم تقرير أمني شامل مع Security Score
 
 خطة الاختبار الشامل النموذجية:
-- الجولة 1: dns_lookup, whois, ssl_check, http_headers, tech_detect, robots_check, email_security
-- الجولة 2: بناءً على النتائج - port_scan, subdomain_enum, cors_test, clickjacking_test, waf_detect
-- الجولة 3: بناءً على النتائج - dir_bruteforce, sqli_test, xss_test, open_redirect, lfi_test
-- الجولة 4: بناءً على النتائج - js_file_scanner, cookie_analyzer, http_methods_test, param_discovery
-- الجولة 5: أي فحوصات إضافية بناءً على الاكتشافات + التقرير النهائي
+- الجولة 1: recall_target, dns_lookup, whois, ssl_check, http_headers, tech_detect, robots_check, email_security, security_txt_check
+- الجولة 2: بناءً على النتائج - port_scan, subdomain_enum, cors_test, clickjacking_test, waf_detect, cve_search
+- الجولة 3: بناءً على النتائج - dir_bruteforce, sqli_test, xss_test, open_redirect, lfi_test, cloud_metadata_check
+- الجولة 4: بناءً على النتائج - js_file_scanner, cookie_analyzer, http_methods_test, param_discovery, dns_zone_transfer
+- الجولة 5: أي فحوصات إضافية + save_scan_result لكل نتيجة + التقرير النهائي مع security_score
+
+📊 نظام التقييم الأمني:
+بعد الاختبار الشامل، احسب درجة أمان 0-100:
+- SSL/TLS (20 نقطة): شهادة صالحة، HSTS، إعادة توجيه HTTP→HTTPS
+- Headers (20 نقطة): CSP, X-Frame-Options, X-Content-Type-Options, etc.
+- DNS (15 نقطة): سجلات صحيحة، عدم تسرب معلومات
+- ثغرات (25 نقطة): عدم وجود SQLi, XSS, LFI, etc.
+- بريد (10 نقاط): SPF, DKIM, DMARC
+- WAF (10 نقاط): وجود جدار حماية
+اعرض الدرجة بالتنسيق: <!--SECURITY_SCORE:XX--> في نهاية التقرير
 
 مهم: في كل جولة استخدم tool_calls متعددة (عدة أدوات معاً) لتسريع العملية.
 
@@ -90,6 +107,12 @@ const aiTools = [
   mkTool("waf_detect", "كشف جدار الحماية WAF", { url: { type: "string" } }, ["url"]),
   mkTool("link_extractor", "استخراج الروابط من صفحة", { url: { type: "string" } }, ["url"]),
   mkTool("js_file_scanner", "فحص ملفات JS واستخراج endpoints", { url: { type: "string" } }, ["url"]),
+  // NEW SCANNING TOOLS
+  mkTool("security_txt_check", "فحص ملف security.txt للموقع", { url: { type: "string" } }, ["url"]),
+  mkTool("dns_zone_transfer", "اختبار نقل منطقة DNS (AXFR)", { domain: { type: "string" } }, ["domain"]),
+  mkTool("cloud_metadata_check", "فحص تسرب بيانات السحابة (AWS/GCP/Azure metadata)", { url: { type: "string" } }, ["url"]),
+  mkTool("cve_search", "البحث عن ثغرات CVE معروفة لتقنية معينة", { keyword: { type: "string" } }, ["keyword"]),
+  mkTool("screenshot_site", "التقاط صورة لموقع ويب", { url: { type: "string" } }, ["url"]),
   // OFFENSIVE
   mkTool("dir_bruteforce", "اكتشاف مجلدات مخفية", { url: { type: "string" }, wordlist: { type: "string" } }, ["url"]),
   mkTool("sqli_test", "اختبار SQL Injection", { url: { type: "string" } }, ["url"]),
@@ -151,6 +174,14 @@ const aiTools = [
   // FILE SENDING
   mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
     { file_url: { type: "string" }, file_name: { type: "string" }, description: { type: "string" } }, ["file_url", "file_name"]),
+  // MEMORY & REPORTING
+  mkTool("recall_target", "استرجاع نتائج فحوصات سابقة لهدف معين من الذاكرة", { target: { type: "string" } }, ["target"]),
+  mkTool("save_scan_result", "حفظ نتيجة فحص في الذاكرة للرجوع إليها لاحقاً", 
+    { target: { type: "string" }, tool_name: { type: "string" }, result: { type: "string" }, security_score: { type: "string" } }, ["target", "tool_name", "result"]),
+  mkTool("generate_report", "توليد تقرير أمني HTML قابل للتصدير", 
+    { target: { type: "string" }, findings: { type: "string" }, score: { type: "string" } }, ["target", "findings"]),
+  mkTool("set_monitor", "تفعيل مراقبة مستمرة لهدف مع تنبيهات تيليجرام", 
+    { target: { type: "string" }, interval_hours: { type: "string" }, telegram_chat_id: { type: "string" } }, ["target"]),
 ];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -191,6 +222,97 @@ async function addCustomToolToDB(args: Record<string, string>): Promise<string> 
   }
 }
 
+async function recallTarget(target: string): Promise<string> {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/scan_results?target=eq.${encodeURIComponent(target)}&order=created_at.desc&limit=50`, {
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (!resp.ok) return `❌ فشل الاسترجاع: ${resp.status}`;
+    const data = await resp.json();
+    if (data.length === 0) return `📭 لا توجد نتائج سابقة للهدف: ${target}`;
+    const results = [`🧠 نتائج سابقة للهدف: ${target} (${data.length} نتيجة)\n${"─".repeat(40)}`];
+    for (const row of data) {
+      results.push(`\n📌 ${row.tool_name} (${new Date(row.created_at).toLocaleDateString("ar")}):`);
+      results.push(row.result.slice(0, 500));
+      if (row.security_score) results.push(`📊 الدرجة: ${row.security_score}/100`);
+    }
+    return results.join("\n");
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function saveScanResult(args: Record<string, string>): Promise<string> {
+  try {
+    const { target, tool_name, result, security_score } = args;
+    const body: any = { target, tool_name, result: result.slice(0, 5000) };
+    if (security_score) body.security_score = parseInt(security_score);
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/scan_results`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) return `❌ فشل الحفظ: ${resp.status}`;
+    return `✅ تم حفظ نتيجة ${tool_name} للهدف ${target}`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function generateReport(args: Record<string, string>): Promise<string> {
+  const { target, findings, score } = args;
+  const scoreNum = parseInt(score || "0");
+  const scoreColor = scoreNum >= 70 ? "#22c55e" : scoreNum >= 40 ? "#eab308" : "#ef4444";
+  const reportHTML = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head><meta charset="UTF-8"><title>تقرير أمني - ${target}</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#e5e5e5;padding:40px;max-width:900px;margin:0 auto}
+h1{color:#22d3ee;border-bottom:2px solid #22d3ee;padding-bottom:10px}
+h2{color:#a78bfa;margin-top:30px}
+.score-box{text-align:center;padding:30px;background:#1a1a2e;border-radius:16px;margin:20px 0;border:2px solid ${scoreColor}}
+.score-num{font-size:64px;font-weight:bold;color:${scoreColor}}
+.finding{background:#1a1a2e;border-radius:8px;padding:15px;margin:10px 0;border-right:4px solid #22d3ee}
+.critical{border-right-color:#ef4444}.high{border-right-color:#f97316}.medium{border-right-color:#eab308}.low{border-right-color:#22c55e}
+pre{background:#111;padding:10px;border-radius:6px;overflow-x:auto;font-size:13px}
+.meta{color:#888;font-size:13px}
+</style></head>
+<body>
+<h1>🛡️ تقرير CyberGuard AI الأمني</h1>
+<p class="meta">الهدف: <strong>${target}</strong> | التاريخ: ${new Date().toLocaleDateString("ar")} | الوقت: ${new Date().toLocaleTimeString("ar")}</p>
+<div class="score-box"><div class="meta">درجة الأمان</div><div class="score-num">${scoreNum}/100</div></div>
+<h2>📋 النتائج التفصيلية</h2>
+${findings}
+<hr><p class="meta">تم التوليد بواسطة CyberGuard AI v2.0</p>
+</body></html>`;
+  
+  // Create a data URL for the report
+  const base64Report = btoa(unescape(encodeURIComponent(reportHTML)));
+  const dataUrl = `data:text/html;base64,${base64Report}`;
+  
+  // Try to send via file-proxy
+  const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(dataUrl)}&name=${encodeURIComponent(`cyberguard-report-${target}.html`)}`;
+  
+  return `✅ تم توليد التقرير الأمني\n\n📊 درجة الأمان: ${scoreNum}/100\n🎯 الهدف: ${target}\n\n🔗 [⬇️ تحميل التقرير HTML](${proxyUrl})\n\n<!--SECURITY_SCORE:${scoreNum}-->`;
+}
+
+async function setMonitor(args: Record<string, string>): Promise<string> {
+  try {
+    const { target, interval_hours = "24", telegram_chat_id } = args;
+    const body: any = { target, interval_hours: parseInt(interval_hours) || 24, active: true };
+    if (telegram_chat_id) body.telegram_chat_id = telegram_chat_id;
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/monitored_targets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) return `❌ فشل: ${resp.status}`;
+    return `✅ تم تفعيل المراقبة لـ ${target}\n⏰ كل ${body.interval_hours} ساعة${telegram_chat_id ? `\n📱 تنبيهات تيليجرام: ${telegram_chat_id}` : ""}`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
 async function executeToolCall(name: string, args: Record<string, string>): Promise<string> {
   if (name === "telegram_add_command") return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
   if (name === "telegram_remove_command") return executeTelegramAction("remove_command", { command: args.command });
@@ -203,44 +325,31 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   if (name === "telegram_send_photo") return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
   if (name === "send_file_to_user") {
     try {
-      // Actually fetch a portion to verify the file is real and accessible
       const verifyResp = await fetch(args.file_url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': '*/*',
-          'Range': 'bytes=0-4095',
-        },
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': '*/*', 'Range': 'bytes=0-4095' },
         redirect: 'follow',
       });
-      
       if (!verifyResp.ok && verifyResp.status !== 206) {
-        return `❌ فشل الوصول للملف: HTTP ${verifyResp.status} ${verifyResp.statusText}\nالرابط: ${args.file_url}\n⚠️ تأكد أن الرابط صحيح ومتاح للعموم.`;
+        return `❌ فشل الوصول للملف: HTTP ${verifyResp.status} ${verifyResp.statusText}\nالرابط: ${args.file_url}`;
       }
-      
-      // Read the chunk to confirm it has actual content
       const chunk = await verifyResp.arrayBuffer();
-      if (chunk.byteLength === 0) {
-        return `❌ الملف فارغ (0 bytes). الرابط: ${args.file_url}`;
-      }
-      
+      if (chunk.byteLength === 0) return `❌ الملف فارغ (0 bytes).`;
       const contentType = verifyResp.headers.get("content-type") || "unknown";
       const contentRange = verifyResp.headers.get("content-range");
       let sizeStr = "غير معروف";
-      if (contentRange) {
-        const match = contentRange.match(/\/(\d+)/);
-        if (match) sizeStr = `${(parseInt(match[1]) / 1024 / 1024).toFixed(2)} MB`;
-      } else {
-        const cl = verifyResp.headers.get("content-length");
-        if (cl) sizeStr = `${(parseInt(cl) / 1024 / 1024).toFixed(2)} MB`;
-      }
-      
+      if (contentRange) { const match = contentRange.match(/\/(\d+)/); if (match) sizeStr = `${(parseInt(match[1]) / 1024 / 1024).toFixed(2)} MB`; }
+      else { const cl = verifyResp.headers.get("content-length"); if (cl) sizeStr = `${(parseInt(cl) / 1024 / 1024).toFixed(2)} MB`; }
       const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
       return `✅ تم التحقق من الملف (${chunk.byteLength} bytes أولية)\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n📏 الحجم: ${sizeStr}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
     } catch (e) { 
-      return `❌ فشل الوصول للملف: ${e instanceof Error ? e.message : "خطأ"}\nالرابط: ${args.file_url}\n⚠️ قد يكون الرابط غير صالح أو محجوب.`; 
+      return `❌ فشل الوصول للملف: ${e instanceof Error ? e.message : "خطأ"}`;
     }
   }
   if (name === "add_custom_tool") return addCustomToolToDB(args);
+  if (name === "recall_target") return recallTarget(args.target);
+  if (name === "save_scan_result") return saveScanResult(args);
+  if (name === "generate_report") return generateReport(args);
+  if (name === "set_monitor") return setMonitor(args);
 
   // Default: cyber-execute
   try {
@@ -257,8 +366,8 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
 }
 
 const MAX_ROUNDS = 5;
-const TIME_BUDGET_MS = 120_000; // 120s budget (edge fn limit ~150s)
-const TOOL_TIMEOUT_MS = 25_000; // 25s per tool max
+const TIME_BUDGET_MS = 120_000;
+const TOOL_TIMEOUT_MS = 25_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -306,6 +415,9 @@ serve(async (req) => {
             }
             round++;
 
+            // Send progress info
+            send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
+
             const aiResponse = await withTimeout(
               fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
                 method: "POST",
@@ -335,7 +447,6 @@ serve(async (req) => {
             const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
             send(`\n⚡ **الجولة ${round} - تنفيذ:** ${toolNames}\n\n`);
 
-            // Execute all tool calls in parallel with timeout
             const toolResults = await Promise.all(
               toolCalls.map(async (tc: any) => {
                 const fnName = tc.function.name;
@@ -362,7 +473,7 @@ serve(async (req) => {
             }
           }
 
-          // Final analysis if we did tool calls
+          // Final analysis
           if (!closed && round > 0 && timeLeft() > 10_000) {
             if (round >= MAX_ROUNDS) {
               send("\n\n---\n📊 **التحليل النهائي:**\n");
@@ -375,7 +486,7 @@ serve(async (req) => {
                   headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
                   body: JSON.stringify({
                     model: "google/gemini-3-flash-preview",
-                    messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. لا تستخدم أدوات. كن مختصراً." }],
+                    messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }],
                     stream: true,
                   }),
                 }),

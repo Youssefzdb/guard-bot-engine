@@ -40,6 +40,21 @@ export function ChatMessage({ message, isStreaming }: ChatMessageProps) {
           <div className="prose prose-sm prose-invert max-w-none text-card-foreground">
             <ReactMarkdown
               components={{
+                a({ href, children, ...props }) {
+                  const isDownload = href?.includes('/file-proxy?');
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={isDownload ? true : undefined}
+                      className={`${isDownload ? 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 no-underline font-medium text-xs transition-colors' : 'text-primary underline hover:text-primary/80'}`}
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  );
+                },
                 code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || "");
                   const isInline = !match;

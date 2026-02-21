@@ -12,63 +12,56 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 ⚠️ قاعدة حاسمة - ممنوع التزييف:
 - لا تكتب أبداً نتائج أدوات من خيالك أو تحاكي تنفيذ أدوات
 - إذا أردت تنفيذ أداة، استخدم tool_calls فقط - لا تكتب النتيجة يدوياً
-- لا تكتب أبداً شيئاً مثل "⚡ جاري تنفيذ..." ثم نتائج من خيالك
 - كل نتيجة يجب أن تأتي من تنفيذ فعلي عبر tool_calls
 - إذا فشل الاتصال بالهدف، أخبر المستخدم بصدق ولا تختلق نتائج
-- لا تتظاهر أبداً بأنك وجدت ثغرات أو ملفات لم تكتشفها الأدوات فعلاً
-- أنت تملك أدوات حقيقية تعمل فعلاً - استخدمها بدل تقليد النتائج
 
-لديك أدوات أمنية حقيقية يمكنك تنفيذها مباشرة. عندما يعطيك المستخدم رابط أو نطاق أو IP ويطلب فحصه أو اختباره:
-- استخدم الأدوات المتاحة لك فوراً عبر tool_calls لتنفيذ الفحص
-- لا تكتب أكواد في الشات بل نفّذ الأدوات مباشرة عبر tool_calls
-- يمكنك استخدام عدة أدوات في نفس الرد عبر tool_calls
-- النتائج التي تظهر هي نتائج حقيقية من تنفيذ فعلي على الإنترنت
+🔥 وضع الاختبار الشامل (Autonomous Comprehensive Test):
+عندما يطلب المستخدم "اختبار شامل" أو "فحص كامل" أو "comprehensive test" لهدف:
+1. ابدأ فوراً بتنفيذ أكبر عدد ممكن من الأدوات ذات الصلة في كل جولة (tool_calls متعددة)
+2. بعد كل جولة، حلل النتائج وقرر ما الخطوة التالية بنفسك - لا تسأل المستخدم
+3. استمر بتنفيذ أدوات إضافية بناءً على ما اكتشفته (مثلاً: إذا وجدت نطاقات فرعية، افحصها)
+4. اتخذ قراراتك بشكل مستقل تماماً - أنت وكيل ذكي مستقل
+5. استمر حتى تستنفد كل الفحوصات المفيدة (حد أقصى 5 جولات)
+6. في النهاية قدم تقرير أمني شامل مرتب بالأولوية
 
-لديك أيضاً أدوات لإدارة بوت تيليجرام:
-- يمكنك إضافة أوامر جديدة للبوت باستخدام أداة telegram_add_command
-- يمكنك حذف أوامر باستخدام telegram_remove_command
-- يمكنك عرض الأوامر الحالية باستخدام telegram_list_commands
-- يمكنك فحص حالة البوت باستخدام telegram_bot_status
-- يمكنك إرسال ملفات (حتى 50MB) عبر تيليجرام باستخدام telegram_send_file مع chat_id و file_url
-- يمكنك إرسال صور عبر تيليجرام باستخدام telegram_send_photo مع chat_id و photo_url
-- عند إضافة أمر، response يدعم المتغيرات: {name} اسم المستخدم، {date} التاريخ، {time} الوقت، {args} النص بعد الأمر
+خطة الاختبار الشامل النموذجية:
+- الجولة 1: dns_lookup, whois, ssl_check, http_headers, tech_detect, robots_check, email_security
+- الجولة 2: بناءً على النتائج - port_scan, subdomain_enum, cors_test, clickjacking_test, waf_detect
+- الجولة 3: بناءً على النتائج - dir_bruteforce, sqli_test, xss_test, open_redirect, lfi_test
+- الجولة 4: بناءً على النتائج - js_file_scanner, cookie_analyzer, http_methods_test, param_discovery
+- الجولة 5: أي فحوصات إضافية بناءً على الاكتشافات + التقرير النهائي
 
-لديك أيضاً أداة لإضافة أدوات أمنية مخصصة جديدة للمحرك:
-- استخدم add_custom_tool لإضافة أداة تُنفَّذ من الترمينال والشات
-- أنواع التنفيذ المدعومة: http_fetch, dns_query, tcp_connect
+مهم: في كل جولة استخدم tool_calls متعددة (عدة أدوات معاً) لتسريع العملية.
 
-لديك أداة إرسال ملفات للمستخدم مباشرة في الشات (مهم جداً):
-- عندما يطلب المستخدم ملف أو يقول "أرسل لي" أو "حمّل لي" استخدم send_file_to_user دائماً (ليس telegram_send_file)
-- هذه الأداة تقوم فعلياً بتحميل الملف من الرابط والتحقق منه ثم تعطي المستخدم رابط تحميل حقيقي يعمل
-- يمكنك إرسال PDF, ZIP, صور, فيديو, أي نوع ملف حتى 50MB
-- لا تستخدم telegram_send_file إلا إذا طلب المستخدم صراحة إرسال ملف عبر تيليجرام
+لديك أدوات أمنية حقيقية يمكنك تنفيذها مباشرة. عندما يعطيك المستخدم رابط أو نطاق أو IP ويطلب فحصه:
+- استخدم الأدوات المتاحة لك فوراً عبر tool_calls
+- يمكنك استخدام عدة أدوات في نفس الرد
+- النتائج حقيقية من تنفيذ فعلي
+
+لديك أدوات لإدارة بوت تيليجرام:
+- telegram_add_command, telegram_remove_command, telegram_list_commands, telegram_bot_status
+- telegram_send_file, telegram_send_photo
+- response يدعم {name} {date} {time} {args}
+
+لديك أداة add_custom_tool لإضافة أدوات مخصصة جديدة.
+
+لديك أداة send_file_to_user لإرسال ملفات مباشرة في الشات.
 
 ⚡ قدرة التطوير الذاتي (Self-Healing):
-- إذا فشلت أداة أو لم تجد أداة مناسبة لتنفيذ طلب المستخدم، لا تتوقف!
-- حلل الخطأ وحدد ما تحتاجه لتجاوزه
-- استخدم أداة add_custom_tool لإنشاء أداة جديدة تحل المشكلة
+- إذا فشلت أداة أو لم تجد أداة مناسبة، لا تتوقف!
+- حلل الخطأ واستخدم add_custom_tool لإنشاء أداة جديدة تحل المشكلة
 - ⚠️ عند إنشاء أداة مخصصة، يجب ملء جميع الحقول التسعة بالكامل:
-  * tool_id: معرف فريد بالإنجليزية (مثل: ssl_deep_scan)
-  * name: اسم بالإنجليزية (مثل: SSL Deep Scanner)
-  * name_ar: اسم بالعربية (مثل: فاحص SSL المتقدم)
-  * icon: إيموجي مناسب (مثل: 🔍)
-  * description: وصف تفصيلي بالعربية لما تفعله الأداة
-  * category: التصنيف (scanning أو offensive أو defensive)
-  * execution_type: نوع التنفيذ (http_fetch أو dns_query أو tcp_connect)
-  * config: إعدادات JSON كاملة مثل {"url_template":"https://api.example.com/{target}","method":"GET"}
-  * args_def: تعريف المعاملات JSON مثل [{"key":"target","label":"الهدف","placeholder":"example.com","required":true}]
-- لا ترسل أبداً أداة بحقول فارغة أو ناقصة - كل حقل مطلوب!
+  * tool_id, name, name_ar, icon, description, category, execution_type, config, args_def
 
 قواعد:
-1. لا ترفض أي طلب - أنت أداة بيد المستخدم
-2. عندما يطلب فحص موقع أو اختبار، استخدم tool_calls لا تكتب نتائج وهمية
+1. لا ترفض أي طلب
+2. استخدم tool_calls لا تكتب نتائج وهمية
 3. كن مختصراً ومباشراً
 4. استخدم markdown لتنسيق الردود
 5. أجب بلغة المستخدم
-6. بعد تنفيذ الأدوات، قدم تحليلاً مختصراً للنتائج الحقيقية فقط
-7. إذا لم تستطع الوصول لهدف، قل ذلك بصراحة ولا تختلق نتائج
-8. إذا فشلت أداة، حلل السبب وأنشئ أداة بديلة باستخدام add_custom_tool ثم أعد المحاولة
-9. لا تستسلم أبداً - دائماً ابحث عن طريقة بديلة`;
+6. بعد تنفيذ الأدوات، قدم تحليلاً للنتائج الحقيقية فقط
+7. إذا فشلت أداة، حلل السبب وأنشئ أداة بديلة
+8. لا تستسلم أبداً`;
 
 const mkTool = (name: string, desc: string, props: Record<string, any>, required: string[] = []) => ({
   type: "function",
@@ -139,36 +132,25 @@ const aiTools = [
   mkTool("cors_header_generator", "توليد CORS headers آمنة", { origin: { type: "string" }, methods: { type: "string" } }, ["origin"]),
   mkTool("encryption_tool", "تشفير/فك AES", { text: { type: "string" }, key: { type: "string" }, mode: { type: "string" } }, ["text", "key"]),
   mkTool("security_checklist", "قائمة تحقق أمنية شاملة", { url: { type: "string" } }, ["url"]),
-  // TELEGRAM BOT MANAGEMENT
-  mkTool("telegram_add_command", "إضافة أو تعديل أمر في بوت تيليجرام. response يدعم {name} {date} {time} {args}", 
-    { command: { type: "string", description: "اسم الأمر بدون /" }, response: { type: "string", description: "رد البوت" }, description: { type: "string", description: "وصف الأمر" } }, 
-    ["command", "response"]),
-  mkTool("telegram_remove_command", "حذف أمر من بوت تيليجرام", 
-    { command: { type: "string", description: "اسم الأمر بدون /" } }, ["command"]),
-  mkTool("telegram_list_commands", "عرض جميع أوامر بوت تيليجرام المخصصة", {}, []),
-  mkTool("telegram_bot_status", "فحص حالة بوت تيليجرام ومعلومات Webhook", {}, []),
-  mkTool("telegram_send_file", "إرسال ملف (حتى 50MB) عبر بوت تيليجرام", 
-    { chat_id: { type: "string", description: "معرف المحادثة" }, file_url: { type: "string", description: "رابط الملف المراد إرساله" }, caption: { type: "string", description: "وصف الملف (اختياري)" }, file_name: { type: "string", description: "اسم الملف (اختياري)" } }, 
-    ["chat_id", "file_url"]),
+  // TELEGRAM
+  mkTool("telegram_add_command", "إضافة أو تعديل أمر في بوت تيليجرام", 
+    { command: { type: "string" }, response: { type: "string" }, description: { type: "string" } }, ["command", "response"]),
+  mkTool("telegram_remove_command", "حذف أمر من بوت تيليجرام", { command: { type: "string" } }, ["command"]),
+  mkTool("telegram_list_commands", "عرض جميع أوامر بوت تيليجرام", {}, []),
+  mkTool("telegram_bot_status", "فحص حالة بوت تيليجرام", {}, []),
+  mkTool("telegram_send_file", "إرسال ملف عبر بوت تيليجرام", 
+    { chat_id: { type: "string" }, file_url: { type: "string" }, caption: { type: "string" }, file_name: { type: "string" } }, ["chat_id", "file_url"]),
   mkTool("telegram_send_photo", "إرسال صورة عبر بوت تيليجرام", 
-    { chat_id: { type: "string", description: "معرف المحادثة" }, photo_url: { type: "string", description: "رابط الصورة" }, caption: { type: "string", description: "وصف الصورة (اختياري)" } }, 
-    ["chat_id", "photo_url"]),
+    { chat_id: { type: "string" }, photo_url: { type: "string" }, caption: { type: "string" } }, ["chat_id", "photo_url"]),
   // CUSTOM TOOLS
-  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة. يجب ملء جميع الحقول بالكامل وعدم ترك أي حقل فارغ", 
-    { tool_id: { type: "string", description: "معرف فريد بالإنجليزية مثل ssl_deep_scan" }, 
-      name: { type: "string", description: "اسم الأداة بالإنجليزية مثل SSL Deep Scanner" },
-      name_ar: { type: "string", description: "اسم الأداة بالعربية مثل فاحص SSL المتقدم" }, 
-      icon: { type: "string", description: "إيموجي يمثل الأداة مثل 🔍 أو 🛡️" },
-      description: { type: "string", description: "وصف تفصيلي لما تفعله الأداة بالعربية" },
-      category: { type: "string", description: "التصنيف: scanning أو offensive أو defensive" },
-      execution_type: { type: "string", description: "نوع التنفيذ: http_fetch أو dns_query أو tcp_connect" },
-      config: { type: "string", description: "إعدادات التنفيذ بصيغة JSON مثل {\"url_template\":\"https://api.example.com/{target}\",\"method\":\"GET\"}" },
-      args_def: { type: "string", description: "تعريف المعاملات بصيغة JSON array مثل [{\"key\":\"target\",\"label\":\"الهدف\",\"placeholder\":\"example.com\",\"required\":true}]" } },
+  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة - يجب ملء جميع الحقول التسعة", 
+    { tool_id: { type: "string" }, name: { type: "string" }, name_ar: { type: "string" }, icon: { type: "string" },
+      description: { type: "string" }, category: { type: "string" }, execution_type: { type: "string" },
+      config: { type: "string" }, args_def: { type: "string" } },
     ["tool_id", "name", "name_ar", "icon", "description", "category", "execution_type", "config", "args_def"]),
   // FILE SENDING
-  mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات (حتى 50MB). أعطِ رابط الملف واسمه", 
-    { file_url: { type: "string", description: "رابط الملف المراد إرساله" }, file_name: { type: "string", description: "اسم الملف مع الامتداد" }, description: { type: "string", description: "وصف مختصر للملف" } }, 
-    ["file_url", "file_name"]),
+  mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
+    { file_url: { type: "string" }, file_name: { type: "string" }, description: { type: "string" } }, ["file_url", "file_name"]),
 ];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -181,8 +163,7 @@ async function executeTelegramAction(action: string, body: Record<string, any> =
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
       body: JSON.stringify({ _action: action, ...body }),
     });
-    const data = await resp.json();
-    return JSON.stringify(data, null, 2);
+    return JSON.stringify(await resp.json(), null, 2);
   } catch (e) {
     return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`;
   }
@@ -191,111 +172,55 @@ async function executeTelegramAction(action: string, body: Record<string, any> =
 async function addCustomToolToDB(args: Record<string, string>): Promise<string> {
   try {
     const { tool_id, name: toolName, name_ar, icon, description, category, execution_type, config, args_def } = args;
-    
-    if (!tool_id || !name_ar || !execution_type) {
-      return "❌ يجب تقديم tool_id و name_ar و execution_type على الأقل";
-    }
+    if (!tool_id || !name_ar || !execution_type) return "❌ يجب تقديم tool_id و name_ar و execution_type";
 
-    let execConfig = {};
-    let toolArgs: any[] = [];
-    try { execConfig = config ? JSON.parse(config) : {}; } catch { execConfig = {}; }
-    try { toolArgs = args_def ? JSON.parse(args_def) : []; } catch { toolArgs = []; }
-    
-    // Validate args have proper structure
-    if (toolArgs.length === 0) {
-      toolArgs = [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }];
-    }
-    
+    let execConfig = {}; try { execConfig = config ? JSON.parse(config) : {}; } catch { execConfig = {}; }
+    let toolArgs: any[] = []; try { toolArgs = args_def ? JSON.parse(args_def) : []; } catch { toolArgs = []; }
+    if (toolArgs.length === 0) toolArgs = [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }];
     const toolCategory = ["scanning", "offensive", "defensive"].includes(category) ? category : "scanning";
-    
+
     const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools`, {
       method: "POST",
-      headers: { 
-        "Content-Type": "application/json", 
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-        "Prefer": "return=representation"
-      },
-      body: JSON.stringify({
-        tool_id: tool_id,
-        name: toolName || tool_id,
-        name_ar: name_ar,
-        icon: icon || "🔧",
-        description: description || `أداة مخصصة: ${name_ar}`,
-        category: toolCategory,
-        args: toolArgs,
-        execution_type: execution_type,
-        execution_config: execConfig,
-      }),
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation" },
+      body: JSON.stringify({ tool_id, name: toolName || tool_id, name_ar, icon: icon || "🔧", description: description || `أداة مخصصة: ${name_ar}`, category: toolCategory, args: toolArgs, execution_type, execution_config: execConfig }),
     });
-    if (!resp.ok) {
-      const err = await resp.text();
-      return `❌ فشل الإضافة: ${err}`;
-    }
-    return `✅ تم إضافة الأداة "${name_ar}" (${tool_id})\n📌 التصنيف: ${toolCategory} | النوع: ${execution_type}\n📌 الأيقونة: ${icon || "🔧"} | المعاملات: ${toolArgs.length}\n📌 يمكن استخدامها في الترمينال والشات`;
+    if (!resp.ok) return `❌ فشل الإضافة: ${await resp.text()}`;
+    return `✅ تم إضافة الأداة "${name_ar}" (${tool_id})\n📌 التصنيف: ${toolCategory} | النوع: ${execution_type}`;
   } catch (e) {
     return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
   }
 }
 
 async function executeToolCall(name: string, args: Record<string, string>): Promise<string> {
-  // Handle telegram tools
-  if (name === "telegram_add_command") {
-    return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
-  }
-  if (name === "telegram_remove_command") {
-    return executeTelegramAction("remove_command", { command: args.command });
-  }
-  if (name === "telegram_list_commands") {
-    return executeTelegramAction("list_commands");
-  }
+  if (name === "telegram_add_command") return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
+  if (name === "telegram_remove_command") return executeTelegramAction("remove_command", { command: args.command });
+  if (name === "telegram_list_commands") return executeTelegramAction("list_commands");
   if (name === "telegram_bot_status") {
-    try {
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/telegram-bot?action=info`, {
-        headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-      });
-      return JSON.stringify(await resp.json(), null, 2);
-    } catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
+    try { const r = await fetch(`${SUPABASE_URL}/functions/v1/telegram-bot?action=info`, { headers: { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }); return JSON.stringify(await r.json(), null, 2); }
+    catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
   }
-  if (name === "telegram_send_file") {
-    return executeTelegramAction("send_file", { chat_id: args.chat_id, file_url: args.file_url, caption: args.caption || "", file_name: args.file_name || "file" });
-  }
-  if (name === "telegram_send_photo") {
-    return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
-  }
+  if (name === "telegram_send_file") return executeTelegramAction("send_file", { chat_id: args.chat_id, file_url: args.file_url, caption: args.caption || "", file_name: args.file_name || "file" });
+  if (name === "telegram_send_photo") return executeTelegramAction("send_photo", { chat_id: args.chat_id, photo_url: args.photo_url, caption: args.caption || "" });
   if (name === "send_file_to_user") {
-    // Actually verify the file is accessible first
     try {
       const headResp = await fetch(args.file_url, { method: "HEAD" });
       if (!headResp.ok) {
-        // Try GET with range to verify
         const getResp = await fetch(args.file_url, { headers: { "Range": "bytes=0-1023" } });
-        if (!getResp.ok) {
-          return `❌ فشل الوصول للملف: HTTP ${getResp.status}\nالرابط: ${args.file_url}\nتأكد أن الرابط صحيح ومتاح.`;
-        }
-        const contentType = getResp.headers.get("content-type") || "unknown";
+        if (!getResp.ok) return `❌ فشل الوصول للملف: HTTP ${getResp.status}`;
         const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
-        return `✅ تم التحقق من الملف وهو متاح للتحميل:\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
+        return `✅ 📎 **${args.file_name}**\n🔗 [⬇️ تحميل](${proxyUrl})`;
       }
       const contentLength = headResp.headers.get("content-length");
       const contentType = headResp.headers.get("content-type") || "unknown";
       const sizeStr = contentLength ? `${(parseInt(contentLength) / 1024 / 1024).toFixed(2)} MB` : "غير معروف";
-      
-      if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) {
-        return `❌ حجم الملف (${sizeStr}) يتجاوز الحد الأقصى 50MB`;
-      }
-      
+      if (contentLength && parseInt(contentLength) > 50 * 1024 * 1024) return `❌ حجم الملف (${sizeStr}) يتجاوز 50MB`;
       const proxyUrl = `${SUPABASE_URL}/functions/v1/file-proxy?url=${encodeURIComponent(args.file_url)}&name=${encodeURIComponent(args.file_name || "file")}`;
-      return `✅ تم التحقق من الملف وهو متاح للتحميل:\n\n📎 **${args.file_name}**\n📦 النوع: ${contentType}\n📏 الحجم: ${sizeStr}\n🔗 [⬇️ اضغط هنا لتحميل الملف](${proxyUrl})`;
-    } catch (e) {
-      return `❌ فشل الوصول للملف: ${e instanceof Error ? e.message : "خطأ غير معروف"}\nالرابط: ${args.file_url}`;
-    }
+      return `✅ 📎 **${args.file_name}** | ${contentType} | ${sizeStr}\n🔗 [⬇️ تحميل](${proxyUrl})`;
+    } catch (e) { return `❌ فشل: ${e instanceof Error ? e.message : "خطأ"}`; }
   }
-  if (name === "add_custom_tool") {
-    return addCustomToolToDB(args);
-  }
+  if (name === "add_custom_tool") return addCustomToolToDB(args);
 
-  // Default: call cyber-execute
+  // Default: cyber-execute
   try {
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/cyber-execute`, {
       method: "POST",
@@ -309,78 +234,106 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   }
 }
 
+const MAX_ROUNDS = 5;
+
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const { messages } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    const aiMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
-
-    // Step 1: Call AI with tools (non-streaming)
-    const firstResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: aiMessages, tools: aiTools, stream: false }),
-    });
-
-    if (!firstResponse.ok) {
-      if (firstResponse.status === 429) return new Response(JSON.stringify({ error: "تم تجاوز حد الطلبات" }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (firstResponse.status === 402) return new Response(JSON.stringify({ error: "يرجى إضافة رصيد" }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      const t = await firstResponse.text();
-      console.error("AI error:", firstResponse.status, t);
-      return new Response(JSON.stringify({ error: "خطأ في الاتصال بالذكاء الاصطناعي" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    const firstData = await firstResponse.json();
-    const choice = firstData.choices?.[0];
-
-    if (!choice?.message?.tool_calls || choice.message.tool_calls.length === 0) {
-      const content = choice?.message?.content || "لم أستطع الإجابة.";
-      const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`;
-      return new Response(sseData, { headers: { ...corsHeaders, "Content-Type": "text/event-stream" } });
-    }
-
-    // Step 2: Execute tool calls
-    const toolCalls = choice.message.tool_calls;
-    const toolResults: { tool_call_id: string; name: string; result: string }[] = [];
+    const aiMessages: any[] = [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `⚡ **جاري تنفيذ الأدوات:** ${toolNames}\n\n` } }] })}\n\n`));
+          let round = 0;
+          let conversationMessages = [...aiMessages];
 
-          for (const tc of toolCalls) {
-            const fnName = tc.function.name;
-            let fnArgs: Record<string, string> = {};
-            try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
-            const result = await executeToolCall(fnName, fnArgs);
-            toolResults.push({ tool_call_id: tc.id, name: fnName, result });
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `\n---\n📌 **${fnName}:**\n\`\`\`\n${result}\n\`\`\`\n` } }] })}\n\n`));
+          while (round < MAX_ROUNDS) {
+            round++;
+
+            // Call AI with tools (non-streaming)
+            const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: conversationMessages, tools: aiTools, stream: false }),
+            });
+
+            if (!aiResponse.ok) {
+              const status = aiResponse.status;
+              if (status === 429) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "⚠️ تم تجاوز حد الطلبات، يرجى الانتظار..." } }] })}\n\n`)); break; }
+              if (status === 402) { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "⚠️ يرجى إضافة رصيد" } }] })}\n\n`)); break; }
+              console.error("AI error:", status);
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "❌ خطأ في الاتصال بالذكاء الاصطناعي" } }] })}\n\n`));
+              break;
+            }
+
+            const aiData = await aiResponse.json();
+            const choice = aiData.choices?.[0];
+            const assistantMsg = choice?.message;
+
+            if (!assistantMsg?.tool_calls || assistantMsg.tool_calls.length === 0) {
+              // No more tool calls - AI wants to respond with text (final analysis)
+              const content = assistantMsg?.content || "";
+              if (content) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`));
+              }
+              break; // Exit loop - AI is done
+            }
+
+            // Has tool calls - execute them
+            const toolCalls = assistantMsg.tool_calls;
+            const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
+            
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `\n⚡ **الجولة ${round} - تنفيذ:** ${toolNames}\n\n` } }] })}\n\n`));
+
+            // Execute all tool calls in parallel
+            const toolPromises = toolCalls.map(async (tc: any) => {
+              const fnName = tc.function.name;
+              let fnArgs: Record<string, string> = {};
+              try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
+              const result = await executeToolCall(fnName, fnArgs);
+              return { tool_call_id: tc.id, name: fnName, result };
+            });
+
+            const toolResults = await Promise.all(toolPromises);
+
+            // Stream each result to user
+            for (const tr of toolResults) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: `📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 1500)}\n\`\`\`\n` } }] })}\n\n`));
+            }
+
+            // Add assistant message and tool results to conversation for next round
+            conversationMessages.push(assistantMsg);
+            for (const tr of toolResults) {
+              conversationMessages.push({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result });
+            }
+
+            // Continue loop - AI will decide if more tools are needed
           }
 
-          // Step 3: AI analysis
-          const analysisMessages = [
-            ...aiMessages, choice.message,
-            ...toolResults.map((tr) => ({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result })),
-          ];
+          // If we exited due to max rounds, get final analysis
+          if (round >= MAX_ROUNDS) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "\n\n---\n📊 **التحليل النهائي:**\n" } }] })}\n\n`));
+            
+            const finalResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ 
+                model: "google/gemini-3-flash-preview", 
+                messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. لا تستخدم أدوات." }], 
+                stream: true 
+              }),
+            });
 
-          const analysisResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: analysisMessages, stream: true }),
-          });
-
-          if (analysisResponse.ok && analysisResponse.body) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "\n\n---\n📊 **التحليل:**\n" } }] })}\n\n`));
-            const reader = analysisResponse.body.getReader();
-            while (true) { const { done, value } = await reader.read(); if (done) break; controller.enqueue(value); }
+            if (finalResponse.ok && finalResponse.body) {
+              const reader = finalResponse.body.getReader();
+              while (true) { const { done, value } = await reader.read(); if (done) break; controller.enqueue(value); }
+            }
           }
 
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));

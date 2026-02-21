@@ -28,6 +28,7 @@ const Terminal = () => {
   const [histIdx, setHistIdx] = useState(-1);
   const [running, setRunning] = useState(false);
   const [customTools, setCustomTools] = useState<SecurityTool[]>([]);
+  const [loadedLibs, setLoadedLibs] = useState<{ name: string; url: string }[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -65,6 +66,8 @@ const Terminal = () => {
     help += `  delcmd <tool_id>      - حذف أمر مخصص\n`;
     help += `  mycmds                - عرض الأوامر المخصصة\n`;
     help += `  exec_js <code>        - تنفيذ كود JavaScript مباشرة\n`;
+    help += `  load_lib <url|name>   - تحميل مكتبة JS من CDN\n`;
+    help += `  libs                  - عرض المكتبات المحمّلة\n`;
     help += `  reload                - إعادة تحميل الأوامر المخصصة\n\n`;
     help += `📌 أنواع التنفيذ: http_fetch, dns_query, tcp_connect\n`;
     help += `📌 مثال إضافة: addcmd my_scan "فحصي" http_fetch url=https://example.com target:الهدف:example.com\n`;
@@ -372,6 +375,68 @@ const Terminal = () => {
           addLine("error", `❌ خطأ: ${e.message}\n${e.stack ? e.stack.split('\n').slice(0,3).join('\n') : ''}`);
         } finally {
           setRunning(false);
+        }
+        break;
+      }
+      case "load_lib": {
+        const libInput = parts.slice(1).join(" ").trim();
+        if (!libInput) {
+          let guide = `\n📦 تحميل مكتبة JavaScript:\n${"─".repeat(40)}\n`;
+          guide += `الصيغة: load_lib <اسم أو رابط>\n\n`;
+          guide += `أمثلة:\n`;
+          guide += `  load_lib lodash\n`;
+          guide += `  load_lib axios\n`;
+          guide += `  load_lib moment\n`;
+          guide += `  load_lib chart.js\n`;
+          guide += `  load_lib https://cdn.jsdelivr.net/npm/lodash/lodash.min.js\n\n`;
+          guide += `📌 يتم التحميل من cdnjs أو jsdelivr تلقائياً\n`;
+          guide += `📌 بعد التحميل، استخدم المكتبة مباشرة في exec_js\n`;
+          addLine("info", guide);
+          break;
+        }
+        addLine("info", `⏳ جاري تحميل المكتبة: ${libInput}...`);
+        setRunning(true);
+        try {
+          let url = libInput;
+          let libName = libInput;
+          if (!libInput.startsWith("http")) {
+            // Try jsdelivr CDN
+            url = `https://cdn.jsdelivr.net/npm/${libInput}`;
+            libName = libInput;
+          } else {
+            libName = libInput.split("/").pop()?.replace(/\.min\.js|\.js/, "") || libInput;
+          }
+          // Check if already loaded
+          if (loadedLibs.some(l => l.name === libName)) {
+            addLine("info", `ℹ️ المكتبة "${libName}" محمّلة بالفعل.`);
+            setRunning(false);
+            break;
+          }
+          const script = document.createElement("script");
+          script.src = url;
+          await new Promise<void>((resolve, reject) => {
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error(`فشل تحميل: ${url}`));
+            document.head.appendChild(script);
+          });
+          setLoadedLibs(prev => [...prev, { name: libName, url }]);
+          addLine("output", `✅ تم تحميل المكتبة: ${libName}\n📌 الرابط: ${url}\n📌 يمكنك استخدامها الآن في exec_js`);
+        } catch (e: any) {
+          addLine("error", `❌ فشل تحميل المكتبة: ${e.message}\n💡 جرب رابط مباشر مثل:\n   load_lib https://cdn.jsdelivr.net/npm/lodash/lodash.min.js`);
+        } finally {
+          setRunning(false);
+        }
+        break;
+      }
+      case "libs": {
+        if (loadedLibs.length === 0) {
+          addLine("info", `\n📭 لا توجد مكتبات محمّلة.\nاستخدم "load_lib <اسم>" لتحميل مكتبة.\n\nمثال: load_lib lodash\n`);
+        } else {
+          let out = `\n📦 المكتبات المحمّلة (${loadedLibs.length}):\n${"─".repeat(40)}\n`;
+          loadedLibs.forEach((l, i) => {
+            out += `  ${i + 1}. ${l.name}\n     ${l.url}\n`;
+          });
+          addLine("info", out);
         }
         break;
       }

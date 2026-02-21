@@ -120,6 +120,23 @@ export const securityTools: SecurityTool[] = [
     args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
   },
 
+  // ========== WAF BYPASS TOOLS ==========
+  {
+    id: "waf_bypass_test", name: "WAF Bypass Test", nameAr: "اختبار تجاوز WAF", icon: "🔓", category: "offensive",
+    description: "اختبار شامل لتجاوز WAF مع تقنيات متعددة (ترميز، headers، methods)",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+  {
+    id: "waf_fingerprint", name: "WAF Fingerprint", nameAr: "بصمة WAF", icon: "🔍", category: "scanning",
+    description: "بصمة WAF تفصيلية مع اختبار حساسية لأنواع الهجمات",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+  {
+    id: "rate_limit_test", name: "Rate Limit Test", nameAr: "اختبار حد الطلبات", icon: "⏱️", category: "scanning",
+    description: "اختبار حدود Rate Limiting للموقع",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+
   // ========== OFFENSIVE (20 tools) ==========
   {
     id: "dir_bruteforce", name: "Directory Discovery", nameAr: "اكتشاف المجلدات", icon: "📂", category: "offensive",

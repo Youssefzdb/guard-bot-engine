@@ -64,6 +64,7 @@ const Terminal = () => {
     help += `                        - إضافة أمر سريع\n`;
     help += `  delcmd <tool_id>      - حذف أمر مخصص\n`;
     help += `  mycmds                - عرض الأوامر المخصصة\n`;
+    help += `  exec_js <code>        - تنفيذ كود JavaScript مباشرة\n`;
     help += `  reload                - إعادة تحميل الأوامر المخصصة\n\n`;
     help += `📌 أنواع التنفيذ: http_fetch, dns_query, tcp_connect\n`;
     help += `📌 مثال إضافة: addcmd my_scan "فحصي" http_fetch url=https://example.com target:الهدف:example.com\n`;
@@ -290,6 +291,39 @@ const Terminal = () => {
       case "mycmds":
         addLine("info", handleMyCmds());
         break;
+      case "exec_js": {
+        const code = parts.slice(1).join(" ");
+        if (!code) {
+          addLine("error", '❌ أدخل الكود: exec_js <code>\nمثال: exec_js 2+2\nمثال: exec_js fetch("https://api.github.com").then(r=>r.json()).then(d=>JSON.stringify(d,null,2))');
+          break;
+        }
+        addLine("info", "⏳ جاري تنفيذ الكود...");
+        setRunning(true);
+        try {
+          const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+          const fn = new AsyncFunction(`
+            const __results = [];
+            const __origLog = console.log;
+            console.log = (...args) => { __results.push(args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ')); __origLog(...args); };
+            try {
+              const __ret = await (async () => { ${code} })();
+              console.log = __origLog;
+              if (__ret !== undefined) __results.push(typeof __ret === 'object' ? JSON.stringify(__ret, null, 2) : String(__ret));
+              return __results.join('\\n') || '✅ تم التنفيذ (بدون مخرجات)';
+            } catch(e) {
+              console.log = __origLog;
+              throw e;
+            }
+          `);
+          const result = await fn();
+          addLine("output", result);
+        } catch (e: any) {
+          addLine("error", `❌ خطأ: ${e.message}`);
+        } finally {
+          setRunning(false);
+        }
+        break;
+      }
       case "reload":
         await loadCustomTools();
         addLine("info", "🔄 تم إعادة تحميل الأوامر المخصصة.");

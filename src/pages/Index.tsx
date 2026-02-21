@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from "react";
-import { Shield, Terminal, Wrench, MessageSquare } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ChatInput";
@@ -7,6 +7,7 @@ import { SuggestionChips } from "@/components/SuggestionChips";
 import { ToolsPanel } from "@/components/ToolsPanel";
 import { ExecutionResult } from "@/components/ExecutionResult";
 import { streamChat, type ChatMessage as ChatMsg } from "@/lib/chat-stream";
+import { fetchSessions, createSession, updateSessionMessages, deleteSession, type ChatSession } from "@/lib/chat-sessions";
 import { useToast } from "@/hooks/use-toast";
 
 const Index = () => {
@@ -14,8 +15,16 @@ const Index = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "tools">("chat");
   const [executionResults, setExecutionResults] = useState<string[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  // Load sessions on mount
+  useEffect(() => {
+    fetchSessions().then(setSessions).catch(console.error);
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -23,7 +32,59 @@ const Index = () => {
     }
   }, [messages, executionResults]);
 
+  // Save messages to DB whenever they change
+  const saveMessages = useCallback(async (sessionId: string, msgs: ChatMsg[]) => {
+    if (msgs.length === 0) return;
+    try {
+      await updateSessionMessages(sessionId, msgs);
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: msgs, title: msgs.find(m => m.role === "user")?.content?.slice(0, 50) || s.title, updated_at: new Date().toISOString() } : s));
+    } catch (e) { console.error("Failed to save session:", e); }
+  }, []);
+
+  const startNewChat = async () => {
+    try {
+      const session = await createSession();
+      setSessions(prev => [session, ...prev]);
+      setCurrentSessionId(session.id);
+      setMessages([]);
+      setExecutionResults([]);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadSession = (session: ChatSession) => {
+    setCurrentSessionId(session.id);
+    setMessages(session.messages);
+    setExecutionResults([]);
+    setShowSidebar(false);
+  };
+
+  const removeSession = async (id: string) => {
+    try {
+      await deleteSession(id);
+      setSessions(prev => prev.filter(s => s.id !== id));
+      if (currentSessionId === id) {
+        setCurrentSessionId(null);
+        setMessages([]);
+      }
+    } catch (e) { console.error(e); }
+  };
+
   const send = async (input: string) => {
+    let sessionId = currentSessionId;
+    if (!sessionId) {
+      try {
+        const session = await createSession(input.slice(0, 50));
+        setSessions(prev => [session, ...prev]);
+        sessionId = session.id;
+        setCurrentSessionId(sessionId);
+      } catch (e) {
+        console.error(e);
+        return;
+      }
+    }
+
     const userMsg: ChatMsg = { role: "user", content: input };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
@@ -49,7 +110,14 @@ const Index = () => {
       await streamChat({
         messages: newMessages,
         onDelta: (chunk) => upsertAssistant(chunk),
-        onDone: () => setIsLoading(false),
+        onDone: () => {
+          setIsLoading(false);
+          // Save after streaming completes
+          setMessages(prev => {
+            saveMessages(sessionId!, prev);
+            return prev;
+          });
+        },
         onError: (error) => {
           setIsLoading(false);
           toast({ title: "خطأ", description: error, variant: "destructive" });
@@ -69,7 +137,31 @@ const Index = () => {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* Sidebar - Tools */}
+      {/* Chat History Sidebar */}
+      <aside className={`${showSidebar ? 'flex' : 'hidden'} md:hidden fixed inset-0 z-50 bg-background flex-col w-full`}>
+        <div className="p-3 border-b border-border flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-semibold text-foreground">سجل المحادثات</h2>
+          </div>
+          <button onClick={() => setShowSidebar(false)} className="text-muted-foreground hover:text-foreground text-lg">✕</button>
+        </div>
+        <div className="p-2">
+          <button onClick={startNewChat} className="w-full flex items-center gap-2 p-2 rounded-lg bg-primary/10 text-primary text-sm hover:bg-primary/20 transition-colors">
+            <Plus className="w-4 h-4" /> محادثة جديدة
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {sessions.map(s => (
+            <div key={s.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm transition-colors ${s.id === currentSessionId ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'}`}>
+              <button onClick={() => loadSession(s)} className="flex-1 text-right truncate">{s.title}</button>
+              <button onClick={() => removeSession(s.id)} className="text-muted-foreground hover:text-destructive shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      {/* Desktop Tools Sidebar */}
       <aside className="hidden md:flex flex-col w-72 border-r border-border bg-card">
         <div className="p-3 border-b border-border">
           <div className="flex items-center gap-2 mb-3">
@@ -77,6 +169,21 @@ const Index = () => {
             <h2 className="text-sm font-display font-semibold text-foreground">أدوات أمنية</h2>
           </div>
           <p className="text-[11px] text-muted-foreground">أدوات حقيقية تنفذ وتعطي نتائج فعلية</p>
+        </div>
+        {/* Session list on desktop */}
+        <div className="border-b border-border">
+          <div className="p-2 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground flex items-center gap-1"><History className="w-3 h-3" /> المحادثات</span>
+            <button onClick={startNewChat} className="text-primary hover:text-primary/80"><Plus className="w-4 h-4" /></button>
+          </div>
+          <div className="max-h-40 overflow-y-auto px-2 pb-2 space-y-0.5">
+            {sessions.slice(0, 10).map(s => (
+              <div key={s.id} className={`flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors ${s.id === currentSessionId ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+                <button onClick={() => loadSession(s)} className="flex-1 text-right truncate">{s.title}</button>
+                <button onClick={() => removeSession(s.id)} className="hover:text-destructive shrink-0"><Trash2 className="w-3 h-3" /></button>
+              </div>
+            ))}
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           <ToolsPanel onResult={handleToolResult} />
@@ -94,25 +201,19 @@ const Index = () => {
             <div>
               <h1 className="text-sm font-display font-semibold text-foreground flex items-center gap-2">
                 CyberGuard AI
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                  AGENT
-                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">AGENT</span>
               </h1>
               <p className="text-xs text-muted-foreground">وكيل أمن سيبراني ذكي • تنفيذ أكواد حقيقي</p>
             </div>
 
-            {/* Mobile tab switcher */}
             <div className="ml-auto flex md:hidden gap-1">
-              <button
-                onClick={() => setActiveTab("chat")}
-                className={`p-2 rounded-lg transition-colors ${activeTab === "chat" ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}
-              >
+              <button onClick={() => setShowSidebar(true)} className="p-2 rounded-lg text-muted-foreground hover:text-primary transition-colors">
+                <History className="w-4 h-4" />
+              </button>
+              <button onClick={() => setActiveTab("chat")} className={`p-2 rounded-lg transition-colors ${activeTab === "chat" ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}>
                 <MessageSquare className="w-4 h-4" />
               </button>
-              <button
-                onClick={() => setActiveTab("tools")}
-                className={`p-2 rounded-lg transition-colors ${activeTab === "tools" ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}
-              >
+              <button onClick={() => setActiveTab("tools")} className={`p-2 rounded-lg transition-colors ${activeTab === "tools" ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}>
                 <Wrench className="w-4 h-4" />
               </button>
             </div>
@@ -155,18 +256,10 @@ const Index = () => {
             ) : (
               <>
                 {messages.map((msg, i) => (
-                  <ChatMessage
-                    key={i}
-                    message={msg}
-                    isStreaming={isLoading && i === messages.length - 1 && msg.role === "assistant"}
-                  />
+                  <ChatMessage key={i} message={msg} isStreaming={isLoading && i === messages.length - 1 && msg.role === "assistant"} />
                 ))}
                 {executionResults.map((result, i) => (
-                  <ExecutionResult
-                    key={`exec-${i}`}
-                    result={result}
-                    onClose={() => setExecutionResults((prev) => prev.filter((_, idx) => idx !== i))}
-                  />
+                  <ExecutionResult key={`exec-${i}`} result={result} onClose={() => setExecutionResults((prev) => prev.filter((_, idx) => idx !== i))} />
                 ))}
               </>
             )}

@@ -2,3 +2,6 @@ project_id = "fzrjlejznsntkwqmehbb"
 
 [functions.cyber-chat]
 verify_jwt = false
+
+[functions.cyber-execute]
+verify_jwt = false

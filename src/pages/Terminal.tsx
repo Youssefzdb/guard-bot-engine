@@ -292,33 +292,84 @@ const Terminal = () => {
         addLine("info", handleMyCmds());
         break;
       case "exec_js": {
-        const code = parts.slice(1).join(" ");
-        if (!code) {
-          addLine("error", '❌ أدخل الكود: exec_js <code>\nمثال: exec_js 2+2\nمثال: exec_js fetch("https://api.github.com").then(r=>r.json()).then(d=>JSON.stringify(d,null,2))');
+        const code = trimmed.substring(trimmed.indexOf(" ") + 1);
+        if (!code || code === "exec_js") {
+          let guide = `\n💻 تنفيذ كود JavaScript:\n${"─".repeat(40)}\n`;
+          guide += `الصيغة: exec_js <كود>\n\n`;
+          guide += `أمثلة:\n`;
+          guide += `  exec_js 2 + 2\n`;
+          guide += `  exec_js console.log("مرحباً")\n`;
+          guide += `  exec_js return [1,2,3].map(x => x * x)\n`;
+          guide += `  exec_js return await fetch("https://api.github.com").then(r => r.json())\n`;
+          guide += `  exec_js for(let i=0;i<5;i++) console.log(i)\n`;
+          guide += `  exec_js const a=10; const b=20; return a+b\n`;
+          guide += `  exec_js return document.title\n`;
+          guide += `  exec_js return navigator.userAgent\n`;
+          guide += `  exec_js return performance.now()\n\n`;
+          guide += `📌 يدعم: async/await, fetch, DOM, console.log, return, حلقات, دوال, كلاسات\n`;
+          guide += `📌 استخدم ; للفصل بين التعليمات المتعددة\n`;
+          guide += `📌 استخدم return لإرجاع قيمة، أو console.log لطباعة مخرجات\n`;
+          addLine("info", guide);
           break;
         }
         addLine("info", "⏳ جاري تنفيذ الكود...");
         setRunning(true);
         try {
           const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+          // Auto-detect: if code is a single expression without return/console/var/let/const/if/for/while/class/function, wrap with return
+          const trimmedCode = code.trim();
+          const isExpression = !trimmedCode.startsWith("return ") &&
+            !trimmedCode.startsWith("return;") &&
+            !trimmedCode.includes("console.") &&
+            !trimmedCode.startsWith("var ") &&
+            !trimmedCode.startsWith("let ") &&
+            !trimmedCode.startsWith("const ") &&
+            !trimmedCode.startsWith("if") &&
+            !trimmedCode.startsWith("if(") &&
+            !trimmedCode.startsWith("for") &&
+            !trimmedCode.startsWith("for(") &&
+            !trimmedCode.startsWith("while") &&
+            !trimmedCode.startsWith("while(") &&
+            !trimmedCode.startsWith("class ") &&
+            !trimmedCode.startsWith("function ") &&
+            !trimmedCode.startsWith("async ") &&
+            !trimmedCode.startsWith("try") &&
+            !trimmedCode.startsWith("{") &&
+            !trimmedCode.includes(";");
+          const wrappedCode = isExpression ? `return ${trimmedCode}` : trimmedCode;
+
           const fn = new AsyncFunction(`
             const __results = [];
             const __origLog = console.log;
-            console.log = (...args) => { __results.push(args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ')); __origLog(...args); };
+            const __origWarn = console.warn;
+            const __origError = console.error;
+            const __origInfo = console.info;
+            const __fmt = (a) => {
+              if (a === undefined) return 'undefined';
+              if (a === null) return 'null';
+              if (a instanceof Error) return a.stack || a.message;
+              if (typeof a === 'object') { try { return JSON.stringify(a, null, 2); } catch { return String(a); } }
+              return String(a);
+            };
+            const __logFn = (prefix) => (...args) => { __results.push((prefix ? prefix + ' ' : '') + args.map(__fmt).join(' ')); };
+            console.log = __logFn('');
+            console.warn = __logFn('⚠️');
+            console.error = __logFn('❌');
+            console.info = __logFn('ℹ️');
             try {
-              const __ret = await (async () => { ${code} })();
-              console.log = __origLog;
-              if (__ret !== undefined) __results.push(typeof __ret === 'object' ? JSON.stringify(__ret, null, 2) : String(__ret));
+              const __ret = await (async () => { ${wrappedCode} })();
+              console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;
+              if (__ret !== undefined) __results.push(__fmt(__ret));
               return __results.join('\\n') || '✅ تم التنفيذ (بدون مخرجات)';
             } catch(e) {
-              console.log = __origLog;
+              console.log = __origLog; console.warn = __origWarn; console.error = __origError; console.info = __origInfo;
               throw e;
             }
           `);
           const result = await fn();
           addLine("output", result);
         } catch (e: any) {
-          addLine("error", `❌ خطأ: ${e.message}`);
+          addLine("error", `❌ خطأ: ${e.message}\n${e.stack ? e.stack.split('\n').slice(0,3).join('\n') : ''}`);
         } finally {
           setRunning(false);
         }

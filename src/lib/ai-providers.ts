@@ -100,11 +100,15 @@ export interface APIKeyEntry {
   lastChecked?: number;
 }
 
+// Keys stored per provider: { "openai": [...], "groq": [...], ... }
+export type ProviderKeysMap = Record<string, APIKeyEntry[]>;
+
 export interface AIProviderSettings {
   providerId: string;
   modelId: string;
   apiKey: string;
-  apiKeys: APIKeyEntry[];
+  apiKeys: APIKeyEntry[]; // active provider's keys (derived)
+  providerKeys: ProviderKeysMap; // all providers' keys
   enabled: boolean;
 }
 
@@ -120,13 +124,24 @@ export async function getAIProviderSettings(): Promise<AIProviderSettings | null
 
     if (error || !data) return null;
 
-    const apiKeys = (data.api_keys as unknown as APIKeyEntry[]) || [];
+    const raw = data.api_keys as unknown;
+    let providerKeys: ProviderKeysMap = {};
+
+    // Migration: if old format (flat array), convert to new per-provider map
+    if (Array.isArray(raw)) {
+      providerKeys[data.provider_id] = raw as APIKeyEntry[];
+    } else if (raw && typeof raw === "object") {
+      providerKeys = raw as ProviderKeysMap;
+    }
+
+    const activeKeys = providerKeys[data.provider_id] || [];
 
     return {
       providerId: data.provider_id,
       modelId: data.model_id,
-      apiKey: apiKeys[0]?.key || "",
-      apiKeys,
+      apiKey: activeKeys[0]?.key || "",
+      apiKeys: activeKeys,
+      providerKeys,
       enabled: data.enabled,
     };
   } catch {
@@ -135,19 +150,18 @@ export async function getAIProviderSettings(): Promise<AIProviderSettings | null
 }
 
 export async function saveAIProviderSettings(settings: AIProviderSettings) {
-  if (settings.apiKeys && settings.apiKeys.length > 0) {
-    settings.apiKey = settings.apiKeys[0].key;
-  }
+  const activeKeys = settings.providerKeys[settings.providerId] || [];
+  settings.apiKey = activeKeys[0]?.key || "";
+  settings.apiKeys = activeKeys;
 
   const row = {
     provider_id: settings.providerId,
     model_id: settings.modelId,
-    api_keys: settings.apiKeys as any,
+    api_keys: settings.providerKeys as any,
     enabled: settings.enabled,
     updated_at: new Date().toISOString(),
   };
 
-  // Try update first, then insert
   const { data: existing } = await supabase
     .from("ai_provider_settings")
     .select("id")
@@ -173,10 +187,13 @@ export async function clearAIProviderSettings() {
 export async function updateKeyStatus(keyIndex: number, status: APIKeyEntry["status"], balance?: string) {
   try {
     const settings = await getAIProviderSettings();
-    if (!settings || !settings.apiKeys[keyIndex]) return;
-    settings.apiKeys[keyIndex].status = status;
-    settings.apiKeys[keyIndex].balance = balance;
-    settings.apiKeys[keyIndex].lastChecked = Date.now();
+    if (!settings) return;
+    const activeKeys = settings.providerKeys[settings.providerId] || [];
+    if (!activeKeys[keyIndex]) return;
+    activeKeys[keyIndex].status = status;
+    activeKeys[keyIndex].balance = balance;
+    activeKeys[keyIndex].lastChecked = Date.now();
+    settings.providerKeys[settings.providerId] = activeKeys;
     await saveAIProviderSettings(settings);
   } catch {}
 }

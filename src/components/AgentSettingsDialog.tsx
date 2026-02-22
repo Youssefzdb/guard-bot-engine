@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { AI_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings, type APIKeyEntry } from "@/lib/ai-providers";
+import { AI_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings, type APIKeyEntry, type ProviderKeysMap } from "@/lib/ai-providers";
 
 const STORAGE_KEY = "cyberguard-agent-settings";
 
@@ -26,14 +26,14 @@ export function getAgentCustomPrompt(): string {
 export function AgentSettingsDialog() {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [showKeys, setShowKeys] = useState<Record<number, boolean>>({});
+  const [showKeys, setShowKeys] = useState<Record<string, Record<number, boolean>>>({});
   const { toast } = useToast();
 
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState("openai");
   const [selectedModel, setSelectedModel] = useState("");
-  const [apiKeys, setApiKeys] = useState<APIKeyEntry[]>([]);
-  const [checkingKey, setCheckingKey] = useState<number | null>(null);
+  const [providerKeys, setProviderKeys] = useState<ProviderKeysMap>({});
+  const [checkingKey, setCheckingKey] = useState<string | null>(null); // "providerId-index"
 
   useEffect(() => {
     if (open) {
@@ -44,12 +44,12 @@ export function AgentSettingsDialog() {
           setProviderEnabled(settings.enabled);
           setSelectedProvider(settings.providerId);
           setSelectedModel(settings.modelId);
-          setApiKeys(settings.apiKeys || [{ key: settings.apiKey || "", label: "مفتاح 1", status: "unknown" }]);
+          setProviderKeys(settings.providerKeys || {});
         } else {
           setProviderEnabled(false);
           setSelectedProvider("openai");
           setSelectedModel("");
-          setApiKeys([]);
+          setProviderKeys({});
         }
       })();
       setShowKeys({});
@@ -64,50 +64,68 @@ export function AgentSettingsDialog() {
     }
   }, [selectedProvider]);
 
-  const addKey = () => {
-    setApiKeys(prev => [...prev, { key: "", label: `مفتاح ${prev.length + 1}`, status: "unknown" }]);
+  // Per-provider key helpers
+  const getKeysForProvider = (providerId: string): APIKeyEntry[] => providerKeys[providerId] || [];
+
+  const setKeysForProvider = (providerId: string, keys: APIKeyEntry[]) => {
+    setProviderKeys(prev => ({ ...prev, [providerId]: keys }));
   };
 
-  const removeKey = (index: number) => {
-    setApiKeys(prev => prev.filter((_, i) => i !== index));
+  const addKey = (providerId: string) => {
+    const current = getKeysForProvider(providerId);
+    setKeysForProvider(providerId, [...current, { key: "", label: `مفتاح ${current.length + 1}`, status: "unknown" }]);
   };
 
-  const updateKey = (index: number, field: keyof APIKeyEntry, value: string) => {
-    setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, [field]: value } : k));
+  const removeKey = (providerId: string, index: number) => {
+    setKeysForProvider(providerId, getKeysForProvider(providerId).filter((_, i) => i !== index));
   };
 
-  const checkKeyBalance = async (index: number) => {
-    const entry = apiKeys[index];
+  const updateKey = (providerId: string, index: number, field: keyof APIKeyEntry, value: string) => {
+    setKeysForProvider(providerId, getKeysForProvider(providerId).map((k, i) => i === index ? { ...k, [field]: value } : k));
+  };
+
+  const checkKeyBalance = async (providerId: string, index: number) => {
+    const keys = getKeysForProvider(providerId);
+    const entry = keys[index];
     if (!entry?.key.trim()) return;
-    setCheckingKey(index);
+    const checkId = `${providerId}-${index}`;
+    setCheckingKey(checkId);
     try {
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/check-api-balance`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
-        body: JSON.stringify({ providerId: selectedProvider, apiKey: entry.key }),
+        body: JSON.stringify({ providerId, apiKey: entry.key }),
       });
       const data = await resp.json();
-      setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, status: data.status || "unknown", balance: data.balance || "غير متاح", lastChecked: Date.now() } : k));
+      setKeysForProvider(providerId, keys.map((k, i) => i === index ? { ...k, status: data.status || "unknown", balance: data.balance || "غير متاح", lastChecked: Date.now() } : k));
     } catch {
-      setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, status: "invalid", balance: "فشل الفحص" } : k));
+      setKeysForProvider(providerId, keys.map((k, i) => i === index ? { ...k, status: "invalid", balance: "فشل الفحص" } : k));
     }
     setCheckingKey(null);
   };
 
-  const checkAllKeys = async () => {
-    for (let i = 0; i < apiKeys.length; i++) {
-      if (apiKeys[i].key.trim()) await checkKeyBalance(i);
+  const checkAllKeysForProvider = async (providerId: string) => {
+    const keys = getKeysForProvider(providerId);
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].key.trim()) await checkKeyBalance(providerId, i);
     }
   };
 
   const handleSave = async () => {
     localStorage.setItem(STORAGE_KEY, prompt);
-    const validKeys = apiKeys.filter(k => k.key.trim());
+    // Clean empty keys from all providers
+    const cleanedKeys: ProviderKeysMap = {};
+    for (const [pid, keys] of Object.entries(providerKeys)) {
+      const valid = keys.filter(k => k.key.trim());
+      if (valid.length > 0) cleanedKeys[pid] = valid;
+    }
+    const activeKeys = cleanedKeys[selectedProvider] || [];
     await saveAIProviderSettings({
       providerId: selectedProvider,
       modelId: selectedModel,
-      apiKey: validKeys[0]?.key || "",
-      apiKeys: validKeys,
+      apiKey: activeKeys[0]?.key || "",
+      apiKeys: activeKeys,
+      providerKeys: cleanedKeys,
       enabled: providerEnabled,
     });
     toast({ title: "تم الحفظ", description: "تم حفظ جميع الإعدادات بنجاح" });
@@ -117,7 +135,7 @@ export function AgentSettingsDialog() {
   const handleReset = async () => {
     setPrompt("");
     setProviderEnabled(false);
-    setApiKeys([]);
+    setProviderKeys({});
     localStorage.removeItem(STORAGE_KEY);
     await clearAIProviderSettings();
     toast({ title: "تم إعادة التعيين", description: "تم إعادة الوكيل للإعدادات الافتراضية" });
@@ -149,6 +167,77 @@ export function AgentSettingsDialog() {
     }
   };
 
+  const getProviderKeyCount = (providerId: string) => {
+    return (providerKeys[providerId] || []).filter(k => k.key.trim()).length;
+  };
+
+  const renderProviderKeys = (providerId: string) => {
+    const provider = AI_PROVIDERS.find(p => p.id === providerId);
+    const keys = getKeysForProvider(providerId);
+    const providerShowKeys = showKeys[providerId] || {};
+
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Label className="text-foreground text-xs">مفاتيح {provider?.name}</Label>
+          <div className="flex items-center gap-2">
+            {provider && (
+              <a href={provider.apiKeyUrl} target="_blank" rel="noopener noreferrer"
+                className="text-[11px] text-primary hover:underline flex items-center gap-1">
+                🔑 احصل على مفتاح
+              </a>
+            )}
+            {keys.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => checkAllKeysForProvider(providerId)} className="h-6 text-[11px] gap-1">
+                <RefreshCw className="w-3 h-3" /> فحص الكل
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {keys.map((entry, index) => (
+            <div key={index} className="p-3 rounded-lg border border-border bg-card space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Input value={entry.label} onChange={(e) => updateKey(providerId, index, "label", e.target.value)}
+                  className="h-7 text-xs bg-background w-32" dir="rtl" placeholder="اسم المفتاح" />
+                <div className="flex items-center gap-1.5">
+                  <div className={`flex items-center gap-1 text-[10px] ${getStatusColor(entry.status)}`}>
+                    {getStatusIcon(entry.status)}
+                    <span>{getStatusText(entry)}</span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => checkKeyBalance(providerId, index)}
+                    disabled={checkingKey === `${providerId}-${index}` || !entry.key.trim()} className="h-6 w-6 p-0">
+                    <RefreshCw className={`w-3 h-3 ${checkingKey === `${providerId}-${index}` ? "animate-spin" : ""}`} />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => removeKey(providerId, index)}
+                    className="h-6 w-6 p-0 text-destructive hover:text-destructive">
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+              </div>
+              <div className="relative">
+                <Input type={providerShowKeys[index] ? "text" : "password"} value={entry.key}
+                  onChange={(e) => updateKey(providerId, index, "key", e.target.value)}
+                  placeholder={`أدخل مفتاح ${provider?.name || ""} API...`}
+                  className="bg-background pl-10 text-xs" dir="ltr" />
+                <button type="button"
+                  onClick={() => setShowKeys(prev => ({ ...prev, [providerId]: { ...(prev[providerId] || {}), [index]: !providerShowKeys[index] } }))}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  {providerShowKeys[index] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Button variant="outline" size="sm" onClick={() => addKey(providerId)} className="w-full gap-1.5 text-xs">
+          <Plus className="w-3.5 h-3.5" /> إضافة مفتاح جديد
+        </Button>
+      </div>
+    );
+  };
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -175,14 +264,9 @@ export function AgentSettingsDialog() {
             <p className="text-xs text-muted-foreground">
               اكتب هنا التعليمات المخصصة التي تريد أن يتبعها الوكيل.
             </p>
-            <Textarea
-              id="agent-prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+            <Textarea id="agent-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)}
               placeholder={`مثال:\nأنت خبير أمن سيبراني محترف اسمك "حارس".\nتتحدث بالعربية الفصحى فقط.\nتقدم تحليلات مفصلة مع توصيات عملية.`}
-              className="min-h-[200px] text-sm font-mono bg-background text-foreground"
-              dir="rtl"
-            />
+              className="min-h-[200px] text-sm font-mono bg-background text-foreground" dir="rtl" />
             <p className="text-[11px] text-muted-foreground">
               {prompt.length > 0 ? `${prompt.length} حرف` : "لا توجد تعليمات مخصصة"}
             </p>
@@ -200,151 +284,81 @@ export function AgentSettingsDialog() {
               <Switch checked={providerEnabled} onCheckedChange={setProviderEnabled} />
             </div>
 
-
-              <div className="space-y-4">
-                {/* Provider Selection */}
-                <div className="space-y-2">
-                  <Label className="text-foreground">اختر المزود</Label>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {AI_PROVIDERS.map(provider => (
-                      <button
-                        key={provider.id}
-                        onClick={() => setSelectedProvider(provider.id)}
-                        className={`p-3 rounded-lg border text-sm font-medium transition-all text-center ${
+            <div className="space-y-4">
+              {/* Provider Selection */}
+              <div className="space-y-2">
+                <Label className="text-foreground">اختر المزود النشط</Label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {AI_PROVIDERS.map(provider => {
+                    const keyCount = getProviderKeyCount(provider.id);
+                    return (
+                      <button key={provider.id} onClick={() => setSelectedProvider(provider.id)}
+                        className={`p-3 rounded-lg border text-sm font-medium transition-all text-center relative ${
                           selectedProvider === provider.id
                             ? "border-primary bg-primary/10 text-primary shadow-sm"
                             : "border-border bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                        }`}
-                      >
+                        }`}>
                         <div className="font-semibold">{provider.name}</div>
                         <div className="text-[10px] opacity-70">{provider.nameAr}</div>
+                        {keyCount > 0 && (
+                          <span className="absolute top-1 left-1 bg-primary text-primary-foreground text-[9px] rounded-full w-4 h-4 flex items-center justify-center">
+                            {keyCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Model Selection */}
+              {currentProvider && (
+                <div className="space-y-2">
+                  <Label className="text-foreground">اختر الموديل</Label>
+                  <Select value={selectedModel} onValueChange={setSelectedModel}>
+                    <SelectTrigger className="bg-background">
+                      <SelectValue placeholder="اختر موديل..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {currentProvider.models.map(model => (
+                        <SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* API Keys - per provider */}
+              <div className="space-y-2">
+                <p className="text-[10px] text-muted-foreground">
+                  كل مزود له مفاتيحه الخاصة — عند فشل مفتاح يتم تجربة المفتاح التالي تلقائياً.
+                </p>
+                {renderProviderKeys(selectedProvider)}
+              </div>
+
+              {/* Summary of all providers with keys */}
+              {Object.keys(providerKeys).filter(pid => pid !== selectedProvider && (providerKeys[pid] || []).some(k => k.key.trim())).length > 0 && (
+                <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2">
+                  <Label className="text-foreground text-xs">مفاتيح المزودين الآخرين</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {AI_PROVIDERS.filter(p => p.id !== selectedProvider && getProviderKeyCount(p.id) > 0).map(p => (
+                      <button key={p.id} onClick={() => setSelectedProvider(p.id)}
+                        className="text-[11px] px-2 py-1 rounded border border-border bg-card hover:border-primary/50 transition-colors flex items-center gap-1">
+                        <span>{p.name}</span>
+                        <span className="bg-primary/20 text-primary rounded-full px-1.5 text-[9px]">{getProviderKeyCount(p.id)}</span>
                       </button>
                     ))}
                   </div>
                 </div>
+              )}
 
-                {/* Model Selection */}
-                {currentProvider && (
-                  <div className="space-y-2">
-                    <Label className="text-foreground">اختر الموديل</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="bg-background">
-                        <SelectValue placeholder="اختر موديل..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {currentProvider.models.map(model => (
-                          <SelectItem key={model.id} value={model.id}>
-                            {model.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {/* API Keys Section */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-foreground">مفاتيح API</Label>
-                    <div className="flex items-center gap-2">
-                      {currentProvider && (
-                        <a
-                          href={currentProvider.apiKeyUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] text-primary hover:underline flex items-center gap-1"
-                        >
-                          🔑 احصل على مفتاح
-                        </a>
-                      )}
-                      {apiKeys.length > 0 && (
-                        <Button variant="ghost" size="sm" onClick={checkAllKeys} className="h-6 text-[11px] gap-1">
-                          <RefreshCw className="w-3 h-3" />
-                          فحص الكل
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  <p className="text-[10px] text-muted-foreground">
-                    أضف عدة مفاتيح - عند فشل مفتاح يتم تجربة المفتاح التالي تلقائياً.
-                  </p>
-
-                  {/* Keys List */}
-                  <div className="space-y-2">
-                    {apiKeys.map((entry, index) => (
-                      <div key={index} className="p-3 rounded-lg border border-border bg-card space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <Input
-                            value={entry.label}
-                            onChange={(e) => updateKey(index, "label", e.target.value)}
-                            className="h-7 text-xs bg-background w-32"
-                            dir="rtl"
-                            placeholder="اسم المفتاح"
-                          />
-                          <div className="flex items-center gap-1.5">
-                            {/* Status badge */}
-                            <div className={`flex items-center gap-1 text-[10px] ${getStatusColor(entry.status)}`}>
-                              {getStatusIcon(entry.status)}
-                              <span>{getStatusText(entry)}</span>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => checkKeyBalance(index)}
-                              disabled={checkingKey === index || !entry.key.trim()}
-                              className="h-6 w-6 p-0"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${checkingKey === index ? "animate-spin" : ""}`} />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeKey(index)}
-                              className="h-6 w-6 p-0 text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <Input
-                            type={showKeys[index] ? "text" : "password"}
-                            value={entry.key}
-                            onChange={(e) => updateKey(index, "key", e.target.value)}
-                            placeholder={`أدخل مفتاح ${currentProvider?.name || ""} API...`}
-                            className="bg-background pl-10 text-xs"
-                            dir="ltr"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowKeys(prev => ({ ...prev, [index]: !prev[index] }))}
-                            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                          >
-                            {showKeys[index] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <Button variant="outline" size="sm" onClick={addKey} className="w-full gap-1.5 text-xs">
-                    <Plus className="w-3.5 h-3.5" />
-                    إضافة مفتاح جديد
-                  </Button>
-
-                  <p className="text-[10px] text-muted-foreground">
-                    المفاتيح تُحفظ في قاعدة البيانات بشكل آمن.
-                  </p>
-                </div>
-
-                {/* Info */}
-                <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-muted-foreground space-y-1">
-                  <p>⚡ عند التفعيل، سيستخدم الوكيل المزود والموديل المختار بدل الافتراضي.</p>
-                  <p>🔄 عند فشل مفتاح (انتهاء الرصيد أو خطأ)، يتم تجربة المفتاح التالي تلقائياً.</p>
-                  <p>🔒 المفاتيح تُحفظ في قاعدة البيانات بشكل آمن ومشفر.</p>
-                </div>
+              {/* Info */}
+              <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-muted-foreground space-y-1">
+                <p>⚡ عند التفعيل، سيستخدم الوكيل المزود والموديل المختار بدل الافتراضي.</p>
+                <p>🔄 عند فشل مفتاح (انتهاء الرصيد أو خطأ)، يتم تجربة المفتاح التالي تلقائياً.</p>
+                <p>🔑 كل مزود يحتفظ بمفاتيحه بشكل مستقل.</p>
               </div>
+            </div>
           </TabsContent>
         </Tabs>
 

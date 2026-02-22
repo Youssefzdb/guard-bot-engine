@@ -19,13 +19,16 @@ export async function streamChat({
 }) {
   const providerSettings = await getAIProviderSettings();
   const body: any = { messages, customSystemPrompt };
-  if (providerSettings && providerSettings.apiKeys?.length > 0) {
-    body.customProvider = {
-      providerId: providerSettings.providerId,
-      modelId: providerSettings.modelId,
-      apiKey: providerSettings.apiKey,
-      apiKeys: providerSettings.apiKeys.filter(k => k.key.trim()).map(k => k.key),
-    };
+  if (providerSettings && providerSettings.enabled) {
+    const activeKeys = (providerSettings.providerKeys?.[providerSettings.providerId] || []).filter(k => k.key.trim());
+    if (activeKeys.length > 0) {
+      body.customProvider = {
+        providerId: providerSettings.providerId,
+        modelId: providerSettings.modelId,
+        apiKey: activeKeys[0].key,
+        apiKeys: activeKeys.map(k => k.key),
+      };
+    }
   }
 
   const resp = await fetch(CHAT_URL, {

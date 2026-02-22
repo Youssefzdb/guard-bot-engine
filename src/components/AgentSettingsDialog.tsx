@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Settings, Eye, EyeOff, Cpu } from "lucide-react";
+import { Settings, Eye, EyeOff, Cpu, Plus, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { AI_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings } from "@/lib/ai-providers";
+import { AI_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings, type APIKeyEntry } from "@/lib/ai-providers";
 
 const STORAGE_KEY = "cyberguard-agent-settings";
 
@@ -26,14 +26,14 @@ export function getAgentCustomPrompt(): string {
 export function AgentSettingsDialog() {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [showKey, setShowKey] = useState(false);
+  const [showKeys, setShowKeys] = useState<Record<number, boolean>>({});
   const { toast } = useToast();
 
-  // AI Provider state
   const [providerEnabled, setProviderEnabled] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState("openai");
   const [selectedModel, setSelectedModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
+  const [apiKeys, setApiKeys] = useState<APIKeyEntry[]>([]);
+  const [checkingKey, setCheckingKey] = useState<number | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -43,14 +43,14 @@ export function AgentSettingsDialog() {
         setProviderEnabled(settings.enabled);
         setSelectedProvider(settings.providerId);
         setSelectedModel(settings.modelId);
-        setApiKey(settings.apiKey);
+        setApiKeys(settings.apiKeys || [{ key: settings.apiKey || "", label: "مفتاح 1", status: "unknown" }]);
       } else {
         setProviderEnabled(false);
         setSelectedProvider("openai");
         setSelectedModel("");
-        setApiKey("");
+        setApiKeys([]);
       }
-      setShowKey(false);
+      setShowKeys({});
     }
   }, [open]);
 
@@ -62,13 +62,51 @@ export function AgentSettingsDialog() {
     }
   }, [selectedProvider]);
 
+  const addKey = () => {
+    setApiKeys(prev => [...prev, { key: "", label: `مفتاح ${prev.length + 1}`, status: "unknown" }]);
+  };
+
+  const removeKey = (index: number) => {
+    setApiKeys(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const updateKey = (index: number, field: keyof APIKeyEntry, value: string) => {
+    setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, [field]: value } : k));
+  };
+
+  const checkKeyBalance = async (index: number) => {
+    const entry = apiKeys[index];
+    if (!entry?.key.trim()) return;
+    setCheckingKey(index);
+    try {
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/check-api-balance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+        body: JSON.stringify({ providerId: selectedProvider, apiKey: entry.key }),
+      });
+      const data = await resp.json();
+      setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, status: data.status || "unknown", balance: data.balance || "غير متاح", lastChecked: Date.now() } : k));
+    } catch {
+      setApiKeys(prev => prev.map((k, i) => i === index ? { ...k, status: "invalid", balance: "فشل الفحص" } : k));
+    }
+    setCheckingKey(null);
+  };
+
+  const checkAllKeys = async () => {
+    for (let i = 0; i < apiKeys.length; i++) {
+      if (apiKeys[i].key.trim()) await checkKeyBalance(i);
+    }
+  };
+
   const handleSave = () => {
     localStorage.setItem(STORAGE_KEY, prompt);
-    if (providerEnabled && apiKey.trim()) {
+    const validKeys = apiKeys.filter(k => k.key.trim());
+    if (providerEnabled && validKeys.length > 0) {
       saveAIProviderSettings({
         providerId: selectedProvider,
         modelId: selectedModel,
-        apiKey: apiKey.trim(),
+        apiKey: validKeys[0].key,
+        apiKeys: validKeys,
         enabled: true,
       });
     } else {
@@ -81,10 +119,36 @@ export function AgentSettingsDialog() {
   const handleReset = () => {
     setPrompt("");
     setProviderEnabled(false);
-    setApiKey("");
+    setApiKeys([]);
     localStorage.removeItem(STORAGE_KEY);
     clearAIProviderSettings();
     toast({ title: "تم إعادة التعيين", description: "تم إعادة الوكيل للإعدادات الافتراضية" });
+  };
+
+  const getStatusIcon = (status?: string) => {
+    switch (status) {
+      case "valid": return <CheckCircle className="w-4 h-4 text-green-500" />;
+      case "invalid": return <XCircle className="w-4 h-4 text-red-500" />;
+      case "no_balance": return <AlertCircle className="w-4 h-4 text-yellow-500" />;
+      default: return <AlertCircle className="w-4 h-4 text-muted-foreground" />;
+    }
+  };
+
+  const getStatusText = (entry: APIKeyEntry) => {
+    if (!entry.status || entry.status === "unknown") return "لم يُفحص";
+    if (entry.status === "valid") return entry.balance || "✓ صالح";
+    if (entry.status === "invalid") return "❌ غير صالح";
+    if (entry.status === "no_balance") return "⚠️ لا رصيد";
+    return "غير معروف";
+  };
+
+  const getStatusColor = (status?: string) => {
+    switch (status) {
+      case "valid": return "text-green-500";
+      case "invalid": return "text-red-500";
+      case "no_balance": return "text-yellow-500";
+      default: return "text-muted-foreground";
+    }
   };
 
   return (
@@ -180,47 +244,107 @@ export function AgentSettingsDialog() {
                   </div>
                 )}
 
-                <div className="space-y-2">
+                {/* API Keys Section */}
+                <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <Label className="text-foreground">مفتاح API</Label>
-                    {currentProvider && (
-                      <a
-                        href={currentProvider.apiKeyUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] text-primary hover:underline flex items-center gap-1"
-                      >
-                        🔑 احصل على مفتاح {currentProvider.name}
-                      </a>
-                    )}
+                    <Label className="text-foreground">مفاتيح API</Label>
+                    <div className="flex items-center gap-2">
+                      {currentProvider && (
+                        <a
+                          href={currentProvider.apiKeyUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                        >
+                          🔑 احصل على مفتاح
+                        </a>
+                      )}
+                      {apiKeys.length > 0 && (
+                        <Button variant="ghost" size="sm" onClick={checkAllKeys} className="h-6 text-[11px] gap-1">
+                          <RefreshCw className="w-3 h-3" />
+                          فحص الكل
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  <div className="relative">
-                    <Input
-                      type={showKey ? "text" : "password"}
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      placeholder={`أدخل مفتاح ${currentProvider?.name || ""} API...`}
-                      className="bg-background pl-10"
-                      dir="ltr"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
+
                   <p className="text-[10px] text-muted-foreground">
-                    المفتاح يُحفظ محلياً في متصفحك فقط ويُرسل مباشرة للمزود عبر الخادم.
+                    أضف عدة مفاتيح - عند فشل مفتاح يتم تجربة المفتاح التالي تلقائياً.
+                  </p>
+
+                  {/* Keys List */}
+                  <div className="space-y-2">
+                    {apiKeys.map((entry, index) => (
+                      <div key={index} className="p-3 rounded-lg border border-border bg-card space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <Input
+                            value={entry.label}
+                            onChange={(e) => updateKey(index, "label", e.target.value)}
+                            className="h-7 text-xs bg-background w-32"
+                            dir="rtl"
+                            placeholder="اسم المفتاح"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            {/* Status badge */}
+                            <div className={`flex items-center gap-1 text-[10px] ${getStatusColor(entry.status)}`}>
+                              {getStatusIcon(entry.status)}
+                              <span>{getStatusText(entry)}</span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => checkKeyBalance(index)}
+                              disabled={checkingKey === index || !entry.key.trim()}
+                              className="h-6 w-6 p-0"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${checkingKey === index ? "animate-spin" : ""}`} />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeKey(index)}
+                              className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <Input
+                            type={showKeys[index] ? "text" : "password"}
+                            value={entry.key}
+                            onChange={(e) => updateKey(index, "key", e.target.value)}
+                            placeholder={`أدخل مفتاح ${currentProvider?.name || ""} API...`}
+                            className="bg-background pl-10 text-xs"
+                            dir="ltr"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowKeys(prev => ({ ...prev, [index]: !prev[index] }))}
+                            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showKeys[index] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Button variant="outline" size="sm" onClick={addKey} className="w-full gap-1.5 text-xs">
+                    <Plus className="w-3.5 h-3.5" />
+                    إضافة مفتاح جديد
+                  </Button>
+
+                  <p className="text-[10px] text-muted-foreground">
+                    المفاتيح تُحفظ محلياً في متصفحك فقط ولا تُرسل لأي خادم سوى المزود المختار.
                   </p>
                 </div>
 
                 {/* Info */}
                 <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-muted-foreground space-y-1">
                   <p>⚡ عند التفعيل، سيستخدم الوكيل المزود والموديل المختار بدل الافتراضي.</p>
-                  <p>🔒 مفتاح API لا يُحفظ في أي خادم - يبقى في متصفحك فقط.</p>
-                  <p>⚠️ تأكد من صلاحية المفتاح ووجود رصيد كافٍ.</p>
+                  <p>🔄 عند فشل مفتاح (انتهاء الرصيد أو خطأ)، يتم تجربة المفتاح التالي تلقائياً.</p>
+                  <p>🔒 المفاتيح لا تُحفظ في أي خادم - تبقى في متصفحك فقط.</p>
                 </div>
               </div>
             )}

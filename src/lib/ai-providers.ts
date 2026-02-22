@@ -3,6 +3,7 @@ export interface AIProvider {
   name: string;
   nameAr: string;
   baseUrl: string;
+  apiKeyUrl: string;
   models: { id: string; name: string }[];
 }
 
@@ -12,6 +13,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "OpenAI",
     nameAr: "أوبن إيه آي",
     baseUrl: "https://api.openai.com/v1/chat/completions",
+    apiKeyUrl: "https://platform.openai.com/api-keys",
     models: [
       { id: "gpt-4o", name: "GPT-4o" },
       { id: "gpt-4o-mini", name: "GPT-4o Mini" },
@@ -27,6 +29,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "Google AI",
     nameAr: "جوجل",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    apiKeyUrl: "https://aistudio.google.com/apikey",
     models: [
       { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
       { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
@@ -40,6 +43,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "Anthropic",
     nameAr: "أنثروبيك",
     baseUrl: "https://api.anthropic.com/v1/messages",
+    apiKeyUrl: "https://console.anthropic.com/settings/keys",
     models: [
       { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
       { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet" },
@@ -52,6 +56,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "xAI (Grok)",
     nameAr: "إكس إيه آي",
     baseUrl: "https://api.x.ai/v1/chat/completions",
+    apiKeyUrl: "https://console.x.ai",
     models: [
       { id: "grok-3", name: "Grok 3" },
       { id: "grok-3-mini", name: "Grok 3 Mini" },
@@ -63,6 +68,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "DeepSeek",
     nameAr: "ديب سيك",
     baseUrl: "https://api.deepseek.com/chat/completions",
+    apiKeyUrl: "https://platform.deepseek.com/api_keys",
     models: [
       { id: "deepseek-chat", name: "DeepSeek Chat (V3)" },
       { id: "deepseek-reasoner", name: "DeepSeek Reasoner (R1)" },
@@ -73,6 +79,7 @@ export const AI_PROVIDERS: AIProvider[] = [
     name: "Groq",
     nameAr: "جروك",
     baseUrl: "https://api.groq.com/openai/v1/chat/completions",
+    apiKeyUrl: "https://console.groq.com/keys",
     models: [
       { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
       { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },

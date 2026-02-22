@@ -491,6 +491,72 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
 const MAX_ROUNDS = 5;
 const TIME_BUDGET_MS = 120_000;
 const TOOL_TIMEOUT_MS = 25_000;
+const MAX_TOKENS_PER_MINUTE = 12000;
+
+// Simple token estimator (~4 chars per token)
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+// Rate limiter: track token usage per minute
+const tokenUsage: { tokens: number; resetAt: number }[] = [];
+
+function getTokensUsedThisMinute(): number {
+  const now = Date.now();
+  // Remove expired entries
+  while (tokenUsage.length > 0 && tokenUsage[0].resetAt <= now) {
+    tokenUsage.shift();
+  }
+  return tokenUsage.reduce((sum, e) => sum + e.tokens, 0);
+}
+
+function recordTokenUsage(tokens: number) {
+  tokenUsage.push({ tokens, resetAt: Date.now() + 60_000 });
+}
+
+function getAvailableTokens(): number {
+  return Math.max(0, MAX_TOKENS_PER_MINUTE - getTokensUsedThisMinute());
+}
+
+async function waitForTokenBudget(needed: number): Promise<boolean> {
+  const available = getAvailableTokens();
+  if (available >= needed) return true;
+  // Wait up to 10 seconds for budget to free up
+  const waitMs = Math.min(10_000, 60_000);
+  await new Promise(r => setTimeout(r, Math.min(waitMs, 5000)));
+  return getAvailableTokens() >= Math.min(needed, 2000); // Allow at least 2000
+}
+
+// Trim messages to fit within token budget
+function trimMessagesToTokenBudget(messages: any[], maxTokens: number): any[] {
+  let total = 0;
+  const result: any[] = [];
+  // Always keep system message
+  if (messages.length > 0 && messages[0].role === "system") {
+    const sysTokens = estimateTokens(JSON.stringify(messages[0]));
+    total += sysTokens;
+    result.push(messages[0]);
+  }
+  // Add messages from newest to oldest, respecting budget
+  const rest = messages.slice(result.length);
+  const reversed = [...rest].reverse();
+  const kept: any[] = [];
+  for (const msg of reversed) {
+    const msgTokens = estimateTokens(JSON.stringify(msg));
+    if (total + msgTokens > maxTokens) {
+      // Truncate content if possible
+      if (typeof msg.content === "string" && msg.content.length > 500) {
+        const truncated = { ...msg, content: msg.content.slice(0, 500) + "\n...[تم الاختصار]" };
+        kept.unshift(truncated);
+        total += estimateTokens(JSON.stringify(truncated));
+      }
+      break;
+    }
+    kept.unshift(msg);
+    total += msgTokens;
+  }
+  return [...result, ...kept];
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -521,7 +587,7 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
       const otherMsgs = messages.filter((m: any) => m.role !== "system");
       const body: any = {
         model: customProvider.modelId,
-        max_tokens: 4096,
+        max_tokens: 1024,
         messages: otherMsgs,
         stream,
       };
@@ -536,7 +602,7 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
       return fetch(config.baseUrl, { method: "POST", headers, body: JSON.stringify(body) });
     }
     
-    const body: any = { model: customProvider.modelId, messages, stream };
+    const body: any = { model: customProvider.modelId, messages, stream, max_tokens: 1024 };
     if (tools.length > 0 && !stream) body.tools = tools;
     return fetch(config.baseUrl, { method: "POST", headers, body: JSON.stringify(body) });
   }
@@ -544,7 +610,7 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   // Default: Lovable AI
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
-  const body: any = { model: "google/gemini-3-flash-preview", messages, stream, max_tokens: 2048 };
+  const body: any = { model: "google/gemini-3-flash-preview", messages, stream, max_tokens: 1024 };
   if (tools.length > 0 && !stream) body.tools = tools;
   return fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -620,20 +686,29 @@ serve(async (req) => {
       ? `${customSystemPrompt}\n\n---\n\n${SYSTEM_PROMPT}` 
       : SYSTEM_PROMPT;
     
-    // Limit conversation history to last 10 messages to avoid "Request too large"
-    const trimmedMessages = messages.length > 10 
-      ? messages.slice(-10) 
+    // Build messages with token budget awareness
+    const systemMessage = { role: "system", content: finalSystemPrompt };
+    const systemTokens = estimateTokens(JSON.stringify(systemMessage));
+    const toolsTokens = estimateTokens(JSON.stringify(aiTools));
+    const availableBudget = Math.max(2000, MAX_TOKENS_PER_MINUTE - systemTokens - toolsTokens - 1024); // Reserve 1024 for response
+    
+    // Limit conversation history to last 8 messages and trim to token budget
+    const trimmedMessages = messages.length > 8 
+      ? messages.slice(-8) 
       : messages;
     
     // Truncate long message contents
     const sanitizedMessages = trimmedMessages.map((m: any) => ({
       ...m,
-      content: typeof m.content === "string" && m.content.length > 3000 
-        ? m.content.slice(0, 3000) + "\n...[تم الاختصار]" 
+      content: typeof m.content === "string" && m.content.length > 2000 
+        ? m.content.slice(0, 2000) + "\n...[تم الاختصار]" 
         : m.content,
     }));
     
-    const aiMessages: any[] = [{ role: "system", content: finalSystemPrompt }, ...sanitizedMessages];
+    const aiMessages: any[] = [systemMessage, ...sanitizedMessages];
+    
+    // Final trim to fit token budget
+    const budgetedMessages = trimMessagesToTokenBudget(aiMessages, availableBudget);
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
@@ -655,17 +730,28 @@ serve(async (req) => {
 
         try {
           let round = 0;
-          let conversationMessages = [...aiMessages];
+          let conversationMessages = [...budgetedMessages];
 
           while (round < MAX_ROUNDS) {
             if (closed || timeLeft() < 15_000) {
               if (!closed) send("\n\n⏱️ انتهى الوقت المتاح، جاري تقديم التقرير...\n");
               break;
             }
+            
+            // Rate limiting: check token budget
+            const requestTokens = estimateTokens(JSON.stringify(conversationMessages));
+            if (!await waitForTokenBudget(requestTokens)) {
+              send("\n⏳ انتظار لتجنب تجاوز حد التوكنات...\n");
+              await new Promise(r => setTimeout(r, 3000));
+            }
+            
             round++;
 
             // Send progress info
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
+            
+            // Record token usage for this request
+            recordTokenUsage(estimateTokens(JSON.stringify(conversationMessages)) + 1024);
 
             const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
               callAIWithFallback(conversationMessages, aiTools, false, customProvider),

@@ -623,9 +623,13 @@ serve(async (req) => {
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;
+              let errText = "";
+              try { errText = await aiResponse.text(); } catch {}
+              console.error(`AI provider error: ${status}`, errText);
               if (status === 429) { send("⚠️ تم تجاوز حد الطلبات، يرجى الانتظار..."); break; }
               if (status === 402) { send("⚠️ يرجى إضافة رصيد"); break; }
-              send("❌ خطأ في الاتصال بالذكاء الاصطناعي"); break;
+              if (status === 401 || status === 403) { send(`❌ مفتاح API غير صالح أو منتهي الصلاحية (${status}). تحقق من المفتاح في الإعدادات.`); break; }
+              send(`❌ خطأ من مزود الذكاء الاصطناعي (${status}): ${errText.slice(0, 200)}`); break;
             }
 
             const aiData = isAnthropic ? parseAnthropicResponse(await aiResponse.json()) : await aiResponse.json();

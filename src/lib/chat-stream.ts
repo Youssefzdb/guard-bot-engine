@@ -24,6 +24,7 @@ export async function streamChat({
       providerId: providerSettings.providerId,
       modelId: providerSettings.modelId,
       apiKey: providerSettings.apiKey,
+      apiKeys: providerSettings.apiKeys?.map(k => k.key) || [providerSettings.apiKey],
     };
   }
 

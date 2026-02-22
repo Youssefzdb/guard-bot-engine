@@ -502,7 +502,7 @@ const PROVIDER_CONFIGS: Record<string, { baseUrl: string; authHeader: (key: stri
   groq: { baseUrl: "https://api.groq.com/openai/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
 };
 
-async function callAI(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string }) {
+async function callAI(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }) {
   if (customProvider && customProvider.apiKey) {
     const config = PROVIDER_CONFIGS[customProvider.providerId];
     if (!config) throw new Error(`مزود غير معروف: ${customProvider.providerId}`);
@@ -510,7 +510,6 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
     const headers: Record<string, string> = { "Content-Type": "application/json", ...config.authHeader(customProvider.apiKey) };
     
     if (config.isAnthropic) {
-      // Anthropic uses a different API format
       const systemMsg = messages.find((m: any) => m.role === "system");
       const otherMsgs = messages.filter((m: any) => m.role !== "system");
       const body: any = {
@@ -545,6 +544,32 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
     headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+// Call AI with fallback keys
+async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }): Promise<{ response: Response; usedKeyIndex: number }> {
+  if (!customProvider?.apiKeys || customProvider.apiKeys.length <= 1) {
+    const response = await callAI(messages, tools, stream, customProvider);
+    return { response, usedKeyIndex: 0 };
+  }
+
+  for (let i = 0; i < customProvider.apiKeys.length; i++) {
+    const providerWithKey = { ...customProvider, apiKey: customProvider.apiKeys[i] };
+    const response = await callAI(messages, tools, stream, providerWithKey);
+    if (response.ok) return { response, usedKeyIndex: i };
+    const status = response.status;
+    // Only fallback on auth/rate/payment errors
+    if (status === 401 || status === 403 || status === 429 || status === 402) {
+      console.log(`Key ${i + 1} failed with ${status}, trying next key...`);
+      continue;
+    }
+    // For other errors, don't fallback
+    return { response, usedKeyIndex: i };
+  }
+  // All keys failed, return last attempt
+  const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[customProvider.apiKeys.length - 1] };
+  const response = await callAI(messages, tools, stream, lastProvider);
+  return { response, usedKeyIndex: customProvider.apiKeys.length - 1 };
 }
 
 // Parse Anthropic response to OpenAI-compatible format
@@ -616,20 +641,24 @@ serve(async (req) => {
             // Send progress info
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
 
-            const aiResponse = await withTimeout(
-              callAI(conversationMessages, aiTools, false, customProvider),
+            const { response: aiResponse, usedKeyIndex } = await withTimeout(
+              callAIWithFallback(conversationMessages, aiTools, false, customProvider),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );
+
+            if (usedKeyIndex > 0 && customProvider?.apiKeys) {
+              send(`\n🔄 تم التبديل للمفتاح ${usedKeyIndex + 1} من ${customProvider.apiKeys.length}\n`);
+            }
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;
               let errText = "";
               try { errText = await aiResponse.text(); } catch {}
               console.error(`AI provider error: ${status}`, errText);
-              if (status === 429) { send("⚠️ تم تجاوز حد الطلبات، يرجى الانتظار..."); break; }
-              if (status === 402) { send("⚠️ يرجى إضافة رصيد"); break; }
-              if (status === 401 || status === 403) { send(`❌ مفتاح API غير صالح أو منتهي الصلاحية (${status}). تحقق من المفتاح في الإعدادات.`); break; }
+              if (status === 429) { send("⚠️ جميع المفاتيح تجاوزت حد الطلبات، يرجى الانتظار..."); break; }
+              if (status === 402) { send("⚠️ جميع المفاتيح بدون رصيد، يرجى إضافة رصيد"); break; }
+              if (status === 401 || status === 403) { send(`❌ جميع مفاتيح API غير صالحة (${status}). تحقق من المفاتيح في الإعدادات.`); break; }
               send(`❌ خطأ من مزود الذكاء الاصطناعي (${status}): ${errText.slice(0, 200)}`); break;
             }
 
@@ -679,8 +708,8 @@ serve(async (req) => {
 
             try {
               const finalMessages = [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }];
-              const finalResponse = await withTimeout(
-                callAI(finalMessages, [], true, customProvider),
+              const { response: finalResponse } = await withTimeout(
+                callAIWithFallback(finalMessages, [], true, customProvider),
                 Math.min(30_000, timeLeft()),
                 "التحليل النهائي"
               );

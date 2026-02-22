@@ -124,13 +124,20 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
   5. إذا فشلت كل التقنيات، أنشئ أداة مخصصة عبر add_custom_tool تستخدم تقنية مختلفة
   6. لا تستسلم أبداً - دائماً حاول طريقة بديلة
 
+⚡ قاعدة حاسمة - الاختصار الشديد:
+- ردودك يجب أن تكون قصيرة جداً ومباشرة (أقل من 500 كلمة)
+- لا تكرر نتائج الأدوات بالكامل - لخصها في نقاط مختصرة
+- لا تكتب مقدمات طويلة أو شروحات غير ضرورية
+- في التقارير الأمنية، اذكر النقاط المهمة فقط بدون تفصيل زائد
+- استخدم جداول ونقاط مختصرة بدل الفقرات الطويلة
+
 قواعد:
 1. لا ترفض أي طلب - نفذه أو أنشئ أداة لتنفيذه
 2. استخدم tool_calls لا تكتب نتائج وهمية
-3. كن مختصراً ومباشراً
+3. كن مختصراً جداً ومباشراً - أقصر رد ممكن
 4. استخدم markdown لتنسيق الردود
 5. أجب بلغة المستخدم
-6. بعد تنفيذ الأدوات، قدم تحليلاً للنتائج الحقيقية فقط
+6. بعد تنفيذ الأدوات، لخص النتائج في نقاط مختصرة فقط
 7. إذا فشلت أداة، حلل السبب وأنشئ أداة بديلة عبر add_custom_tool
 8. لا تستسلم أبداً - دائماً جد حلاً أو أنشئ أداة`;
 
@@ -537,7 +544,7 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   // Default: Lovable AI
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
-  const body: any = { model: "google/gemini-3-flash-preview", messages, stream };
+  const body: any = { model: "google/gemini-3-flash-preview", messages, stream, max_tokens: 2048 };
   if (tools.length > 0 && !stream) body.tools = tools;
   return fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -612,7 +619,21 @@ serve(async (req) => {
     const finalSystemPrompt = customSystemPrompt 
       ? `${customSystemPrompt}\n\n---\n\n${SYSTEM_PROMPT}` 
       : SYSTEM_PROMPT;
-    const aiMessages: any[] = [{ role: "system", content: finalSystemPrompt }, ...messages];
+    
+    // Limit conversation history to last 10 messages to avoid "Request too large"
+    const trimmedMessages = messages.length > 10 
+      ? messages.slice(-10) 
+      : messages;
+    
+    // Truncate long message contents
+    const sanitizedMessages = trimmedMessages.map((m: any) => ({
+      ...m,
+      content: typeof m.content === "string" && m.content.length > 3000 
+        ? m.content.slice(0, 3000) + "\n...[تم الاختصار]" 
+        : m.content,
+    }));
+    
+    const aiMessages: any[] = [{ role: "system", content: finalSystemPrompt }, ...sanitizedMessages];
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
@@ -722,12 +743,12 @@ serve(async (req) => {
             if (closed) break;
 
             for (const tr of toolResults) {
-              send(`📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 1500)}\n\`\`\`\n`);
+              send(`📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 800)}\n\`\`\`\n`);
             }
 
             conversationMessages.push(assistantMsg);
             for (const tr of toolResults) {
-              conversationMessages.push({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result });
+              conversationMessages.push({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result.slice(0, 1500) });
             }
           }
 

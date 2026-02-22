@@ -1677,18 +1677,44 @@ serve(async (req) => {
   try {
     const { tool, args, customConfig } = await req.json();
     
-    // Handle custom tools
-    if (tool?.startsWith("custom_") && customConfig) {
+    // Handle custom tools (with customConfig provided)
+    if (customConfig) {
       const result = await executeCustomTool(args || {}, customConfig);
       return new Response(JSON.stringify({ result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     
-    if (!tool || !tools[tool]) {
-      return new Response(JSON.stringify({ error: "أداة غير معروفة", available_tools: Object.keys(tools) }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    // Check built-in tools
+    const toolName = tool?.startsWith("custom_") ? tool.replace("custom_", "") : tool;
+    if (toolName && tools[toolName]) {
+      const result = await tools[toolName](args || {});
+      return new Response(JSON.stringify({ result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
-    const result = await tools[tool](args || {});
-    return new Response(JSON.stringify({ result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    
+    // Not found in built-in tools - try to find in DB as custom tool
+    if (toolName) {
+      try {
+        const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+        const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+        const dbResp = await fetch(
+          `${SUPABASE_URL}/rest/v1/custom_tools?tool_id=eq.${encodeURIComponent(toolName)}&limit=1`,
+          { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` } }
+        );
+        if (dbResp.ok) {
+          const rows = await dbResp.json();
+          if (rows.length > 0) {
+            const row = rows[0];
+            const result = await executeCustomTool(args || {}, {
+              executionType: row.execution_type,
+              executionConfig: row.execution_config || {},
+            });
+            return new Response(JSON.stringify({ result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          }
+        }
+      } catch {}
+    }
+
+    return new Response(JSON.stringify({ error: "أداة غير معروفة", available_tools: Object.keys(tools) }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     console.error("execution error:", e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "خطأ" }),

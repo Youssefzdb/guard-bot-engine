@@ -204,8 +204,8 @@ export function AgentSettingsDialog() {
               <Switch checked={providerEnabled} onCheckedChange={setProviderEnabled} />
             </div>
 
-            {providerEnabled && (
-              <div className="space-y-4 animate-in fade-in-0 slide-in-from-top-2">
+
+              <div className="space-y-4">
                 {/* Provider Selection */}
                 <div className="space-y-2">
                   <Label className="text-foreground">اختر المزود</Label>
@@ -349,7 +349,6 @@ export function AgentSettingsDialog() {
                   <p>🔒 المفاتيح تُحفظ في قاعدة البيانات بشكل آمن ومشفر.</p>
                 </div>
               </div>
-            )}
           </TabsContent>
         </Tabs>
 

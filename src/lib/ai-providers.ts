@@ -119,10 +119,8 @@ export async function getAIProviderSettings(): Promise<AIProviderSettings | null
       .maybeSingle();
 
     if (error || !data) return null;
-    if (!data.enabled) return null;
 
     const apiKeys = (data.api_keys as unknown as APIKeyEntry[]) || [];
-    if (apiKeys.length === 0) return null;
 
     return {
       providerId: data.provider_id,

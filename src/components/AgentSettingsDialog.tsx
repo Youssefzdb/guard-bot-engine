@@ -103,17 +103,13 @@ export function AgentSettingsDialog() {
   const handleSave = async () => {
     localStorage.setItem(STORAGE_KEY, prompt);
     const validKeys = apiKeys.filter(k => k.key.trim());
-    if (providerEnabled && validKeys.length > 0) {
-      await saveAIProviderSettings({
-        providerId: selectedProvider,
-        modelId: selectedModel,
-        apiKey: validKeys[0].key,
-        apiKeys: validKeys,
-        enabled: true,
-      });
-    } else {
-      await clearAIProviderSettings();
-    }
+    await saveAIProviderSettings({
+      providerId: selectedProvider,
+      modelId: selectedModel,
+      apiKey: validKeys[0]?.key || "",
+      apiKeys: validKeys,
+      enabled: providerEnabled,
+    });
     toast({ title: "تم الحفظ", description: "تم حفظ جميع الإعدادات بنجاح" });
     setOpen(false);
   };

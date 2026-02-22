@@ -620,14 +620,18 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
 }
 
 // Call AI with fallback keys - always prioritize custom keys
-async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
+async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }, startFromKey = 0): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
   if (!customProvider?.apiKeys || customProvider.apiKeys.length <= 1) {
     const response = await callAI(messages, tools, stream, customProvider);
     return { response, usedKeyIndex: 0 };
   }
 
   const errors: string[] = [];
-  for (let i = 0; i < customProvider.apiKeys.length; i++) {
+  const keyCount = customProvider.apiKeys.length;
+  
+  // Start from the last successful key, then cycle through others
+  for (let attempt = 0; attempt < keyCount; attempt++) {
+    const i = (startFromKey + attempt) % keyCount;
     const providerWithKey = { ...customProvider, apiKey: customProvider.apiKeys[i] };
     const response = await callAI(messages, tools, stream, providerWithKey);
     if (response.ok) return { response, usedKeyIndex: i };
@@ -636,18 +640,16 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
     try { errBody = await response.text(); } catch {}
     const maskedKey = customProvider.apiKeys[i].slice(0, 6) + "***" + customProvider.apiKeys[i].slice(-4);
     errors.push(`المفتاح ${i + 1} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
-    // Only fallback on auth/rate/payment errors
     if (status === 401 || status === 403 || status === 429 || status === 402) {
-      console.log(`Key ${i + 1} failed with ${status}, trying next key...`);
+      console.log(`Key ${i + 1} failed with ${status}, trying next key silently...`);
       continue;
     }
-    // For other errors, don't fallback
     return { response, usedKeyIndex: i, errorDetails: errors.join("\n") };
   }
-  // All keys failed
-  const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[customProvider.apiKeys.length - 1] };
+  // All keys failed - try last successful one more time
+  const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[startFromKey % keyCount] };
   const response = await callAI(messages, tools, stream, lastProvider);
-  return { response, usedKeyIndex: customProvider.apiKeys.length - 1, errorDetails: errors.join("\n") };
+  return { response, usedKeyIndex: startFromKey % keyCount, errorDetails: errors.join("\n") };
 }
 
 // Parse Anthropic response to OpenAI-compatible format
@@ -731,6 +733,7 @@ serve(async (req) => {
         try {
           let round = 0;
           let conversationMessages = [...budgetedMessages];
+          let lastSuccessfulKey = 0; // Track which key worked last
 
           while (round < MAX_ROUNDS) {
             if (closed || timeLeft() < 15_000) {
@@ -754,14 +757,13 @@ serve(async (req) => {
             recordTokenUsage(estimateTokens(JSON.stringify(conversationMessages)) + 1024);
 
             const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
-              callAIWithFallback(conversationMessages, aiTools, false, customProvider),
+              callAIWithFallback(conversationMessages, aiTools, false, customProvider, lastSuccessfulKey),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );
 
-            if (usedKeyIndex > 0 && customProvider?.apiKeys) {
-              send(`\n🔄 تم التبديل للمفتاح ${usedKeyIndex + 1} من ${customProvider.apiKeys.length}\n`);
-            }
+            // Silently update the last successful key - no interruption message
+            lastSuccessfulKey = usedKeyIndex;
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;
@@ -847,7 +849,7 @@ serve(async (req) => {
             try {
               const finalMessages = [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }];
               const { response: finalResponse } = await withTimeout(
-                callAIWithFallback(finalMessages, [], true, customProvider),
+                callAIWithFallback(finalMessages, [], true, customProvider, lastSuccessfulKey),
                 Math.min(30_000, timeLeft()),
                 "التحليل النهائي"
               );

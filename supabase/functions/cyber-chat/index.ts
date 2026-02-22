@@ -492,13 +492,91 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
+// Provider configs for custom API keys
+const PROVIDER_CONFIGS: Record<string, { baseUrl: string; authHeader: (key: string) => Record<string, string>; isAnthropic?: boolean }> = {
+  openai: { baseUrl: "https://api.openai.com/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
+  google: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
+  anthropic: { baseUrl: "https://api.anthropic.com/v1/messages", authHeader: (k) => ({ "x-api-key": k, "anthropic-version": "2023-06-01" }), isAnthropic: true },
+  xai: { baseUrl: "https://api.x.ai/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
+  deepseek: { baseUrl: "https://api.deepseek.com/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
+};
+
+async function callAI(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string }) {
+  if (customProvider && customProvider.apiKey) {
+    const config = PROVIDER_CONFIGS[customProvider.providerId];
+    if (!config) throw new Error(`مزود غير معروف: ${customProvider.providerId}`);
+    
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...config.authHeader(customProvider.apiKey) };
+    
+    if (config.isAnthropic) {
+      // Anthropic uses a different API format
+      const systemMsg = messages.find((m: any) => m.role === "system");
+      const otherMsgs = messages.filter((m: any) => m.role !== "system");
+      const body: any = {
+        model: customProvider.modelId,
+        max_tokens: 4096,
+        messages: otherMsgs,
+        stream,
+      };
+      if (systemMsg) body.system = systemMsg.content;
+      if (tools.length > 0 && !stream) {
+        body.tools = tools.map((t: any) => ({
+          name: t.function.name,
+          description: t.function.description,
+          input_schema: t.function.parameters,
+        }));
+      }
+      return fetch(config.baseUrl, { method: "POST", headers, body: JSON.stringify(body) });
+    }
+    
+    const body: any = { model: customProvider.modelId, messages, stream };
+    if (tools.length > 0 && !stream) body.tools = tools;
+    return fetch(config.baseUrl, { method: "POST", headers, body: JSON.stringify(body) });
+  }
+  
+  // Default: Lovable AI
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+  const body: any = { model: "google/gemini-3-flash-preview", messages, stream };
+  if (tools.length > 0 && !stream) body.tools = tools;
+  return fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// Parse Anthropic response to OpenAI-compatible format
+function parseAnthropicResponse(data: any): any {
+  const toolCalls = data.content?.filter((c: any) => c.type === "tool_use")?.map((c: any, i: number) => ({
+    id: c.id,
+    type: "function",
+    function: { name: c.name, arguments: JSON.stringify(c.input) },
+  }));
+  const textContent = data.content?.filter((c: any) => c.type === "text")?.map((c: any) => c.text).join("") || "";
+  return {
+    choices: [{
+      message: {
+        role: "assistant",
+        content: textContent || null,
+        tool_calls: toolCalls?.length > 0 ? toolCalls : undefined,
+      }
+    }]
+  };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages, customSystemPrompt } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const { messages, customSystemPrompt, customProvider } = await req.json();
+    
+    // Validate we have either custom provider or default key
+    if (!customProvider?.apiKey && !Deno.env.get("LOVABLE_API_KEY")) {
+      throw new Error("No AI API key configured");
+    }
+
+    const isAnthropic = customProvider?.providerId === "anthropic";
 
     const finalSystemPrompt = customSystemPrompt 
       ? `${customSystemPrompt}\n\n---\n\n${SYSTEM_PROMPT}` 
@@ -538,11 +616,7 @@ serve(async (req) => {
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
 
             const aiResponse = await withTimeout(
-              fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                method: "POST",
-                headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "google/gemini-3-flash-preview", messages: conversationMessages, tools: aiTools, stream: false }),
-              }),
+              callAI(conversationMessages, aiTools, false, customProvider),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );
@@ -554,7 +628,7 @@ serve(async (req) => {
               send("❌ خطأ في الاتصال بالذكاء الاصطناعي"); break;
             }
 
-            const aiData = await aiResponse.json();
+            const aiData = isAnthropic ? parseAnthropicResponse(await aiResponse.json()) : await aiResponse.json();
             const assistantMsg = aiData.choices?.[0]?.message;
 
             if (!assistantMsg?.tool_calls || assistantMsg.tool_calls.length === 0) {
@@ -599,16 +673,9 @@ serve(async (req) => {
             }
 
             try {
+              const finalMessages = [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }];
               const finalResponse = await withTimeout(
-                fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-                  method: "POST",
-                  headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    model: "google/gemini-3-flash-preview",
-                    messages: [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }],
-                    stream: true,
-                  }),
-                }),
+                callAI(finalMessages, [], true, customProvider),
                 Math.min(30_000, timeLeft()),
                 "التحليل النهائي"
               );

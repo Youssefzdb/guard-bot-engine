@@ -1,3 +1,5 @@
+import { getAIProviderSettings } from "./ai-providers";
+
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cyber-chat`;
@@ -15,13 +17,23 @@ export async function streamChat({
   onDone: () => void;
   onError: (error: string) => void;
 }) {
+  const providerSettings = getAIProviderSettings();
+  const body: any = { messages, customSystemPrompt };
+  if (providerSettings) {
+    body.customProvider = {
+      providerId: providerSettings.providerId,
+      modelId: providerSettings.modelId,
+      apiKey: providerSettings.apiKey,
+    };
+  }
+
   const resp = await fetch(CHAT_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
-    body: JSON.stringify({ messages, customSystemPrompt }),
+    body: JSON.stringify(body),
   });
 
   if (!resp.ok) {

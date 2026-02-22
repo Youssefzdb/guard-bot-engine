@@ -499,6 +499,7 @@ const PROVIDER_CONFIGS: Record<string, { baseUrl: string; authHeader: (key: stri
   anthropic: { baseUrl: "https://api.anthropic.com/v1/messages", authHeader: (k) => ({ "x-api-key": k, "anthropic-version": "2023-06-01" }), isAnthropic: true },
   xai: { baseUrl: "https://api.x.ai/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
   deepseek: { baseUrl: "https://api.deepseek.com/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
+  groq: { baseUrl: "https://api.groq.com/openai/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
 };
 
 async function callAI(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string }) {

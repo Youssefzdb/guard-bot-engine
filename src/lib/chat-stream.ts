@@ -17,7 +17,7 @@ export async function streamChat({
   onDone: () => void;
   onError: (error: string) => void;
 }) {
-  const providerSettings = getAIProviderSettings();
+  const providerSettings = await getAIProviderSettings();
   const body: any = { messages, customSystemPrompt };
   if (providerSettings) {
     body.customProvider = {

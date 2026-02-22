@@ -1,3 +1,5 @@
+import { supabase } from "@/integrations/supabase/client";
+
 export interface AIProvider {
   id: string;
   name: string;
@@ -90,8 +92,6 @@ export const AI_PROVIDERS: AIProvider[] = [
   },
 ];
 
-const PROVIDER_SETTINGS_KEY = "cyberguard-ai-provider";
-
 export interface APIKeyEntry {
   key: string;
   label: string;
@@ -103,56 +103,82 @@ export interface APIKeyEntry {
 export interface AIProviderSettings {
   providerId: string;
   modelId: string;
-  apiKey: string; // kept for backward compat - primary key
-  apiKeys: APIKeyEntry[]; // all keys for fallback
+  apiKey: string;
+  apiKeys: APIKeyEntry[];
   enabled: boolean;
 }
 
-export function getAIProviderSettings(): AIProviderSettings | null {
+// ---- Database-backed persistence ----
+
+export async function getAIProviderSettings(): Promise<AIProviderSettings | null> {
   try {
-    const raw = localStorage.getItem(PROVIDER_SETTINGS_KEY);
-    if (!raw) return null;
-    const settings = JSON.parse(raw) as AIProviderSettings;
-    if (!settings.enabled) return null;
-    // Migrate old format (single key) to new format
-    if (!settings.apiKeys || settings.apiKeys.length === 0) {
-      if (settings.apiKey) {
-        settings.apiKeys = [{ key: settings.apiKey, label: "مفتاح 1", status: "unknown" }];
-      } else {
-        return null;
-      }
-    }
-    // Ensure apiKey is always the first valid key
-    settings.apiKey = settings.apiKeys[0]?.key || "";
-    if (!settings.apiKey) return null;
-    return settings;
+    const { data, error } = await supabase
+      .from("ai_provider_settings")
+      .select("*")
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    if (!data.enabled) return null;
+
+    const apiKeys = (data.api_keys as unknown as APIKeyEntry[]) || [];
+    if (apiKeys.length === 0) return null;
+
+    return {
+      providerId: data.provider_id,
+      modelId: data.model_id,
+      apiKey: apiKeys[0]?.key || "",
+      apiKeys,
+      enabled: data.enabled,
+    };
   } catch {
     return null;
   }
 }
 
-export function saveAIProviderSettings(settings: AIProviderSettings) {
-  // Sync apiKey with first key in array
+export async function saveAIProviderSettings(settings: AIProviderSettings) {
   if (settings.apiKeys && settings.apiKeys.length > 0) {
     settings.apiKey = settings.apiKeys[0].key;
   }
-  localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(settings));
+
+  const row = {
+    provider_id: settings.providerId,
+    model_id: settings.modelId,
+    api_keys: settings.apiKeys as any,
+    enabled: settings.enabled,
+    updated_at: new Date().toISOString(),
+  };
+
+  // Try update first, then insert
+  const { data: existing } = await supabase
+    .from("ai_provider_settings")
+    .select("id")
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) {
+    await supabase
+      .from("ai_provider_settings")
+      .update(row)
+      .eq("id", existing.id);
+  } else {
+    await supabase
+      .from("ai_provider_settings")
+      .insert(row);
+  }
 }
 
-export function clearAIProviderSettings() {
-  localStorage.removeItem(PROVIDER_SETTINGS_KEY);
+export async function clearAIProviderSettings() {
+  await supabase.from("ai_provider_settings").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 }
 
-export function updateKeyStatus(keyIndex: number, status: APIKeyEntry["status"], balance?: string) {
+export async function updateKeyStatus(keyIndex: number, status: APIKeyEntry["status"], balance?: string) {
   try {
-    const raw = localStorage.getItem(PROVIDER_SETTINGS_KEY);
-    if (!raw) return;
-    const settings = JSON.parse(raw) as AIProviderSettings;
-    if (settings.apiKeys && settings.apiKeys[keyIndex]) {
-      settings.apiKeys[keyIndex].status = status;
-      settings.apiKeys[keyIndex].balance = balance;
-      settings.apiKeys[keyIndex].lastChecked = Date.now();
-      localStorage.setItem(PROVIDER_SETTINGS_KEY, JSON.stringify(settings));
-    }
+    const settings = await getAIProviderSettings();
+    if (!settings || !settings.apiKeys[keyIndex]) return;
+    settings.apiKeys[keyIndex].status = status;
+    settings.apiKeys[keyIndex].balance = balance;
+    settings.apiKeys[keyIndex].lastChecked = Date.now();
+    await saveAIProviderSettings(settings);
   } catch {}
 }

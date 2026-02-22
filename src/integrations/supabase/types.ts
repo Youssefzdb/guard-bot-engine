@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_provider_settings: {
+        Row: {
+          api_keys: Json
+          created_at: string
+          enabled: boolean
+          id: string
+          model_id: string
+          provider_id: string
+          updated_at: string
+        }
+        Insert: {
+          api_keys?: Json
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          model_id: string
+          provider_id: string
+          updated_at?: string
+        }
+        Update: {
+          api_keys?: Json
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          model_id?: string
+          provider_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       chat_sessions: {
         Row: {
           created_at: string

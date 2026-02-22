@@ -818,7 +818,48 @@ serve(async (req) => {
               toolCalls.map(async (tc: any) => {
                 const fnName = tc.function.name;
                 let fnArgs: Record<string, string> = {};
-                try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch { fnArgs = {}; }
+                try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch {
+                  // Fallback: try to extract JSON from content
+                  const raw = tc.function.arguments || "";
+                  const jsonMatch = raw.replace(/```(?:json)?\n?/g, "").match(/\{[\s\S]*\}/);
+                  if (jsonMatch) { try { fnArgs = JSON.parse(jsonMatch[0]); } catch { fnArgs = {}; } }
+                }
+                
+                // Auto-fix common parameter mismatches
+                const toolDef = aiTools.find((t: any) => t.function.name === fnName);
+                if (toolDef) {
+                  const required = toolDef.function.parameters.required || [];
+                  const props = Object.keys(toolDef.function.parameters.properties || {});
+                  for (const req of required) {
+                    if (!fnArgs[req]) {
+                      // Try to find the value from other args (e.g. "target" -> "domain", "url" -> "domain")
+                      const aliases: Record<string, string[]> = {
+                        domain: ["target", "url", "host", "site"],
+                        url: ["target", "domain", "site", "host"],
+                        target: ["domain", "url", "host", "ip", "site"],
+                        ip: ["target", "host"],
+                      };
+                      const candidates = aliases[req] || [];
+                      for (const alt of candidates) {
+                        if (fnArgs[alt]) {
+                          let val = fnArgs[alt];
+                          // Clean URL to domain if needed
+                          if (req === "domain" && val.startsWith("http")) {
+                            try { val = new URL(val).hostname; } catch {}
+                          }
+                          fnArgs[req] = val;
+                          break;
+                        }
+                      }
+                      // Last resort: use any string value from args
+                      if (!fnArgs[req]) {
+                        const anyVal = Object.values(fnArgs).find(v => typeof v === "string" && v.length > 0);
+                        if (anyVal) fnArgs[req] = anyVal as string;
+                      }
+                    }
+                  }
+                }
+                
                 try {
                   const result = await withTimeout(executeToolCall(fnName, fnArgs), TOOL_TIMEOUT_MS, fnName);
                   return { tool_call_id: tc.id, name: fnName, result };

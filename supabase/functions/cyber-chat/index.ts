@@ -54,6 +54,10 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 - لا تترك config فارغاً مع http_fetch — يجب وضع urlTemplate حقيقي
 - بعد إنشاء الأداة، نفذها مباشرة باستدعاء tool_id كأداة عادية
 - أنت تفهم البروتوكولات (HTTP, TCP, UDP, DNS, TLS, SMTP, FTP, SSH) واكتب أكواد تتعامل معها مباشرة
+- ⚠️⚠️⚠️ حرج جداً: config و args_def يجب أن يكونا JSON STRING (نص) وليس كائن JavaScript!
+  صحيح: config: '{"script":"return await fetch(...)"}' 
+  خاطئ: config: {"script":"return await fetch(...)"}
+  إذا أرسلتهم ككائن ستحصل على خطأ 400 "expected string"
 
 أمثلة على الفهم الذكي:
 - "افحص الموقع" → استخدم أدوات الفحص الموجودة
@@ -252,10 +256,11 @@ const aiTools = [
   mkTool("telegram_send_photo", "إرسال صورة عبر بوت تيليجرام", 
     { chat_id: { type: "string" }, photo_url: { type: "string" }, caption: { type: "string" } }, ["chat_id", "photo_url"]),
   // CUSTOM TOOLS
-  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة - يجب ملء جميع الحقول التسعة", 
-    { tool_id: { type: "string" }, name: { type: "string" }, name_ar: { type: "string" }, icon: { type: "string" },
-      description: { type: "string" }, category: { type: "string" }, execution_type: { type: "string" },
-      config: { type: "string" }, args_def: { type: "string" } },
+  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة — ⚠️ config و args_def يجب أن يكونا JSON STRING (نص) وليس كائن JavaScript", 
+    { tool_id: { type: "string", description: "معرف فريد للأداة" }, name: { type: "string", description: "اسم إنجليزي" }, name_ar: { type: "string", description: "اسم عربي" }, icon: { type: "string", description: "إيموجي" },
+      description: { type: "string", description: "وصف الأداة" }, category: { type: "string", description: "scanning أو offensive أو defensive" }, execution_type: { type: "string", description: "http_fetch أو dns_query أو tcp_connect أو custom_script" },
+      config: { type: "string", description: "يجب أن يكون JSON STRING مثل: '{\"script\":\"return await fetch(...)\"}' — لا ترسل كائن بل نص" }, 
+      args_def: { type: "string", description: "يجب أن يكون JSON STRING مثل: '[{\"key\":\"target\",\"label\":\"الهدف\",\"placeholder\":\"example.com\",\"required\":true}]'" } },
     ["tool_id", "name", "name_ar", "icon", "description", "category", "execution_type", "config", "args_def"]),
   // FILE SENDING
   mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
@@ -297,8 +302,8 @@ async function addCustomToolToDB(args: Record<string, string>): Promise<string> 
     const { tool_id, name: toolName, name_ar, icon, description, category, execution_type, config, args_def } = args;
     if (!tool_id || !name_ar || !execution_type) return "❌ يجب تقديم tool_id و name_ar و execution_type";
 
-    let execConfig = {}; try { execConfig = config ? JSON.parse(config) : {}; } catch { execConfig = {}; }
-    let toolArgs: any[] = []; try { toolArgs = args_def ? JSON.parse(args_def) : []; } catch { toolArgs = []; }
+    let execConfig = {}; try { execConfig = (typeof config === "object" && config !== null) ? config : (config ? JSON.parse(config) : {}); } catch { execConfig = {}; }
+    let toolArgs: any[] = []; try { toolArgs = (typeof args_def === "object" && args_def !== null) ? args_def : (args_def ? JSON.parse(args_def) : []); } catch { toolArgs = []; }
     if (toolArgs.length === 0) toolArgs = [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }];
     const toolCategory = ["scanning", "offensive", "defensive"].includes(category) ? category : "scanning";
 

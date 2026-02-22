@@ -492,6 +492,9 @@ const MAX_ROUNDS = 5;
 const TIME_BUDGET_MS = 120_000;
 const TOOL_TIMEOUT_MS = 25_000;
 const MAX_TOKENS_PER_MINUTE = 12000;
+const MIN_DELAY_MS = 800;   // Minimum delay between AI calls
+const MAX_DELAY_MS = 15_000; // Maximum backoff delay
+const INITIAL_DELAY_MS = 1000; // Starting delay
 
 // Simple token estimator (~4 chars per token)
 function estimateTokens(text: string): number {
@@ -501,9 +504,44 @@ function estimateTokens(text: string): number {
 // Rate limiter: track token usage per minute
 const tokenUsage: { tokens: number; resetAt: number }[] = [];
 
+// Smart request queue with adaptive delay
+const requestQueue = {
+  lastRequestTime: 0,
+  consecutiveErrors: 0,
+  currentDelay: INITIAL_DELAY_MS,
+
+  // Adaptive delay: increases on errors, decreases on success
+  getDelay(): number {
+    if (this.consecutiveErrors === 0) return MIN_DELAY_MS;
+    // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
+    return Math.min(MAX_DELAY_MS, INITIAL_DELAY_MS * Math.pow(2, this.consecutiveErrors - 1));
+  },
+
+  async waitTurn(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this.lastRequestTime;
+    const delay = this.getDelay();
+    if (elapsed < delay) {
+      await new Promise(r => setTimeout(r, delay - elapsed));
+    }
+    this.lastRequestTime = Date.now();
+  },
+
+  onSuccess() {
+    this.consecutiveErrors = Math.max(0, this.consecutiveErrors - 1);
+  },
+
+  onRateLimit() {
+    this.consecutiveErrors = Math.min(5, this.consecutiveErrors + 1);
+  },
+
+  reset() {
+    this.consecutiveErrors = 0;
+  }
+};
+
 function getTokensUsedThisMinute(): number {
   const now = Date.now();
-  // Remove expired entries
   while (tokenUsage.length > 0 && tokenUsage[0].resetAt <= now) {
     tokenUsage.shift();
   }
@@ -521,10 +559,10 @@ function getAvailableTokens(): number {
 async function waitForTokenBudget(needed: number): Promise<boolean> {
   const available = getAvailableTokens();
   if (available >= needed) return true;
-  // Wait up to 10 seconds for budget to free up
-  const waitMs = Math.min(10_000, 60_000);
-  await new Promise(r => setTimeout(r, Math.min(waitMs, 5000)));
-  return getAvailableTokens() >= Math.min(needed, 2000); // Allow at least 2000
+  // Wait with exponential backoff
+  const waitMs = Math.min(10_000, requestQueue.getDelay() + 2000);
+  await new Promise(r => setTimeout(r, waitMs));
+  return getAvailableTokens() >= Math.min(needed, 2000);
 }
 
 // Trim messages to fit within token budget
@@ -619,36 +657,62 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   });
 }
 
-// Call AI with fallback keys - always prioritize custom keys
+// Call AI with fallback keys, smart queue, and retry with backoff
 async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }, startFromKey = 0): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
+  // Smart queue: wait for turn before making request
+  await requestQueue.waitTurn();
+
   if (!customProvider?.apiKeys || customProvider.apiKeys.length <= 1) {
     const response = await callAI(messages, tools, stream, customProvider);
+    if (response.ok) { requestQueue.onSuccess(); }
+    else if (response.status === 429) { requestQueue.onRateLimit(); }
     return { response, usedKeyIndex: 0 };
   }
 
   const errors: string[] = [];
   const keyCount = customProvider.apiKeys.length;
   
-  // Start from the last successful key, then cycle through others
   for (let attempt = 0; attempt < keyCount; attempt++) {
     const i = (startFromKey + attempt) % keyCount;
     const providerWithKey = { ...customProvider, apiKey: customProvider.apiKeys[i] };
+    
+    // Add delay between key attempts on rate limit
+    if (attempt > 0) {
+      const retryDelay = Math.min(3000, 500 * attempt);
+      await new Promise(r => setTimeout(r, retryDelay));
+    }
+    
     const response = await callAI(messages, tools, stream, providerWithKey);
-    if (response.ok) return { response, usedKeyIndex: i };
+    if (response.ok) {
+      requestQueue.onSuccess();
+      return { response, usedKeyIndex: i };
+    }
     const status = response.status;
     let errBody = "";
     try { errBody = await response.text(); } catch {}
     const maskedKey = customProvider.apiKeys[i].slice(0, 6) + "***" + customProvider.apiKeys[i].slice(-4);
     errors.push(`المفتاح ${i + 1} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
-    if (status === 401 || status === 403 || status === 429 || status === 402) {
+    
+    if (status === 429) {
+      requestQueue.onRateLimit();
+      console.log(`Key ${i + 1} hit rate limit, backing off ${requestQueue.getDelay()}ms...`);
+      continue;
+    }
+    if (status === 401 || status === 403 || status === 402) {
       console.log(`Key ${i + 1} failed with ${status}, trying next key silently...`);
       continue;
     }
     return { response, usedKeyIndex: i, errorDetails: errors.join("\n") };
   }
-  // All keys failed - try last successful one more time
+  
+  // All keys exhausted - wait with backoff then retry first key once more
+  const backoffMs = requestQueue.getDelay();
+  console.log(`All keys failed, waiting ${backoffMs}ms before final retry...`);
+  await new Promise(r => setTimeout(r, backoffMs));
+  
   const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[startFromKey % keyCount] };
   const response = await callAI(messages, tools, stream, lastProvider);
+  if (response.ok) requestQueue.onSuccess();
   return { response, usedKeyIndex: startFromKey % keyCount, errorDetails: errors.join("\n") };
 }
 

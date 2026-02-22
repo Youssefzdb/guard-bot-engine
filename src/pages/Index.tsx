@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History, Settings } from "lucide-react";
+import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History, Settings, Download } from "lucide-react";
 import { AgentSettingsDialog, getAgentCustomPrompt } from "@/components/AgentSettingsDialog";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -244,7 +244,11 @@ const Index = () => {
                 <Terminal className="w-3.5 h-3.5" />
                 <span>Terminal</span>
               </Link>
-              <span className="text-xs text-muted-foreground">v2.0 • Live Execution</span>
+              <Link to="/install" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors px-2 py-1 rounded-lg hover:bg-primary/10">
+                <Download className="w-3.5 h-3.5" />
+                <span>تثبيت</span>
+              </Link>
+              <span className="text-xs text-muted-foreground">v2.0</span>
             </div>
           </div>
         </header>

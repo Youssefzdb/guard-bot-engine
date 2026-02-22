@@ -97,6 +97,12 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
 
 لديك أداة send_file_to_user لإرسال ملفات مباشرة في الشات.
 
+📧 إرسال الإيميلات:
+- لديك أداة send_email لإرسال إيميلات مع ملفات ومرفقات وتقارير
+- عندما يطلب المستخدم إرسال ملف أو تقرير على الإيميل، استخدم send_email
+- يمكنك إرسال تقارير HTML أو نصوص أو ملفات مرفقة
+- اسأل المستخدم عن الإيميل إذا لم يحدده مسبقاً
+
 ⚡ قدرة التطوير الذاتي (Self-Healing):
 - إذا فشلت أداة أو لم تجد أداة مناسبة، لا تتوقف!
 - حلل الخطأ واستخدم add_custom_tool لإنشاء أداة جديدة تحل المشكلة
@@ -226,6 +232,12 @@ const aiTools = [
   // FILE SENDING
   mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
     { file_url: { type: "string" }, file_name: { type: "string" }, description: { type: "string" } }, ["file_url", "file_name"]),
+  // EMAIL
+  mkTool("send_email", "إرسال إيميل للمستخدم مع ملفات أو تقارير", 
+    { to: { type: "string", description: "عنوان الإيميل المستلم" }, subject: { type: "string", description: "عنوان الرسالة" }, 
+      body: { type: "string", description: "محتوى الرسالة (HTML أو نص)" }, 
+      file_url: { type: "string", description: "رابط الملف المرفق (اختياري)" },
+      file_name: { type: "string", description: "اسم الملف المرفق (اختياري)" } }, ["to", "subject", "body"]),
   // MEMORY & REPORTING
   mkTool("recall_target", "استرجاع نتائج فحوصات سابقة لهدف معين من الذاكرة", { target: { type: "string" } }, ["target"]),
   mkTool("save_scan_result", "حفظ نتيجة فحص في الذاكرة للرجوع إليها لاحقاً", 
@@ -365,6 +377,57 @@ async function setMonitor(args: Record<string, string>): Promise<string> {
   }
 }
 
+async function sendEmail(args: Record<string, string>): Promise<string> {
+  try {
+    const { to, subject, body, file_url, file_name } = args;
+    if (!to || !subject) return "❌ يجب تحديد الإيميل (to) والعنوان (subject)";
+
+    const emailPayload: any = { to, subject };
+    
+    // Detect if body is HTML
+    if (body && (body.includes("<") && body.includes(">"))) {
+      emailPayload.html = body;
+    } else {
+      emailPayload.text = body || "No content";
+    }
+
+    // Handle file attachment
+    if (file_url) {
+      try {
+        const fileResp = await fetch(file_url, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': '*/*' },
+          redirect: 'follow',
+        });
+        if (fileResp.ok) {
+          const buffer = await fileResp.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          const contentType = fileResp.headers.get('content-type') || 'application/octet-stream';
+          emailPayload.attachments = [{
+            filename: file_name || 'attachment',
+            content: base64,
+            content_type: contentType,
+          }];
+        }
+      } catch (e) {
+        // Continue without attachment
+        console.error("Failed to fetch attachment:", e);
+      }
+    }
+
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/send-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify(emailPayload),
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) return `❌ فشل إرسال الإيميل: ${data.error || resp.status}`;
+    return `✅ تم إرسال الإيميل بنجاح إلى ${to}\n📧 العنوان: ${subject}${file_url ? `\n📎 مرفق: ${file_name || 'file'}` : ''}`;
+  } catch (e) {
+    return `❌ خطأ في إرسال الإيميل: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
 async function executeToolCall(name: string, args: Record<string, string>): Promise<string> {
   if (name === "telegram_add_command") return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
   if (name === "telegram_remove_command") return executeTelegramAction("remove_command", { command: args.command });
@@ -402,6 +465,7 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   if (name === "save_scan_result") return saveScanResult(args);
   if (name === "generate_report") return generateReport(args);
   if (name === "set_monitor") return setMonitor(args);
+  if (name === "send_email") return sendEmail(args);
 
   // Default: cyber-execute
   try {

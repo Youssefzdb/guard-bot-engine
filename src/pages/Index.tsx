@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Shield, Terminal, Wrench, MessageSquare, Plus, Trash2, History, Settings } from "lucide-react";
 import { AgentSettingsDialog, getAgentCustomPrompt } from "@/components/AgentSettingsDialog";
 import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ChatInput";
 import { SuggestionChips } from "@/components/SuggestionChips";
@@ -54,11 +55,27 @@ const Index = () => {
     }
   };
 
-  const loadSession = (session: ChatSession) => {
+  const loadSession = async (session: ChatSession) => {
     setCurrentSessionId(session.id);
-    setMessages(session.messages);
     setExecutionResults([]);
     setShowSidebar(false);
+    // Always fetch fresh messages from DB
+    try {
+      const { data, error } = await supabase
+        .from("chat_sessions")
+        .select("*")
+        .eq("id", session.id)
+        .maybeSingle();
+      if (data) {
+        const msgs = (data.messages || []) as ChatMsg[];
+        setMessages(msgs);
+        setSessions(prev => prev.map(s => s.id === session.id ? { ...s, messages: msgs } : s));
+      } else {
+        setMessages(session.messages);
+      }
+    } catch {
+      setMessages(session.messages);
+    }
   };
 
   const removeSession = async (id: string) => {

@@ -180,9 +180,20 @@ export function AgentSettingsDialog() {
                   </div>
                 )}
 
-                {/* API Key */}
                 <div className="space-y-2">
-                  <Label className="text-foreground">مفتاح API</Label>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-foreground">مفتاح API</Label>
+                    {currentProvider && (
+                      <a
+                        href={currentProvider.apiKeyUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                      >
+                        🔑 احصل على مفتاح {currentProvider.name}
+                      </a>
+                    )}
+                  </div>
                   <div className="relative">
                     <Input
                       type={showKey ? "text" : "password"}

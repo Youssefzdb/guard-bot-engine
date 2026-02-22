@@ -28,11 +28,46 @@ const SYSTEM_PROMPT = `أنت مساعد ذكاء اصطناعي متعدد ال
    - icon: إيموجي مناسب
    - description: وصف واضح
    - category: "scanning" أو "offensive" أو "defensive"
-   - execution_type: "http_fetch" أو "dns_query" أو "tcp_connect" أو "custom_script"
-   - config: JSON يحتوي إعدادات التنفيذ (مثل URL أو أوامر)
+   - execution_type: نوع التنفيذ الفعلي (انظر الأمثلة أدناه)
+   - config: JSON يحتوي إعدادات التنفيذ الحقيقية (انظر الأمثلة أدناه)
    - args_def: JSON يحتوي تعريف المعاملات
-4. بعد الإنشاء، نفذ الأداة مباشرة عبر cyber-execute
+4. بعد الإنشاء، نفذ الأداة فوراً بنفس اسم tool_id - النظام سيجلب الإعدادات من قاعدة البيانات تلقائياً
 5. قدم النتيجة للمستخدم
+
+⚠️ أمثلة حقيقية لإنشاء أدوات فعّالة (يجب اتباعها):
+
+مثال 1 - أداة HTTP (فحص API):
+  execution_type: "http_fetch"
+  config: '{"urlTemplate":"https://api.example.com/check?target={target}","method":"GET"}'
+  args_def: '[{"key":"target","label":"الهدف","placeholder":"example.com","required":true}]'
+
+مثال 2 - أداة DNS:
+  execution_type: "dns_query"
+  config: '{}'
+  args_def: '[{"key":"domain","label":"النطاق","placeholder":"example.com","required":true}]'
+
+مثال 3 - أداة TCP:
+  execution_type: "tcp_connect"
+  config: '{}'
+  args_def: '[{"key":"target","label":"الهدف","placeholder":"example.com","required":true},{"key":"port","label":"المنفذ","placeholder":"443","required":true}]'
+
+مثال 4 - سكريبت مخصص (الأقوى - يمكنه فعل أي شيء):
+  execution_type: "custom_script"
+  config: '{"script":"const resp = await fetch(args.url || \"https://\" + args.target); const text = await resp.text(); const headers = Object.fromEntries(resp.headers.entries()); return JSON.stringify({status: resp.status, headers, bodyLength: text.length, snippet: text.slice(0,500)}, null, 2);"}'
+  args_def: '[{"key":"target","label":"الهدف","placeholder":"example.com","required":true}]'
+
+مثال 5 - فحص سرعة موقع:
+  execution_type: "custom_script"
+  config: '{"script":"const times = []; for(let i=0; i<3; i++){ const s=performance.now(); const r=await fetch(\"https://\"+args.target); await r.text(); times.push(performance.now()-s); } const avg=times.reduce((a,b)=>a+b)/times.length; return \"متوسط وقت الاستجابة: \"+avg.toFixed(0)+\"ms | أسرع: \"+Math.min(...times).toFixed(0)+\"ms | أبطأ: \"+Math.max(...times).toFixed(0)+\"ms\";"}'
+  args_def: '[{"key":"target","label":"الهدف","placeholder":"example.com","required":true}]'
+
+⚠️ قواعد حاسمة لإنشاء الأدوات:
+- execution_type يجب أن يكون: "http_fetch" أو "dns_query" أو "tcp_connect" أو "custom_script"
+- للأدوات المعقدة، استخدم دائماً "custom_script" مع سكريبت JavaScript حقيقي في config.script
+- السكريبت يمكنه استخدام: fetch, Deno, args, performance
+- السكريبت يجب أن يُرجع (return) نتيجة نصية
+- لا تترك config فارغاً أبداً مع http_fetch - يجب وضع urlTemplate
+- بعد إنشاء الأداة، نفذها مباشرة باستدعاء tool_id كأداة عادية
 
 أمثلة على الفهم الذكي:
 - "افحص الموقع" → استخدم أدوات الفحص الموجودة
@@ -474,12 +509,36 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   if (name === "set_monitor") return setMonitor(args);
   if (name === "send_email") return sendEmail(args);
 
-  // Default: cyber-execute
+  // Default: cyber-execute — check if it's a custom tool first
   try {
+    // Try to find custom tool config from DB
+    let customConfig: { executionType: string; executionConfig: Record<string, string> } | undefined;
+    const toolId = name.startsWith("custom_") ? name.replace("custom_", "") : name;
+    
+    try {
+      const dbResp = await fetch(
+        `${SUPABASE_URL}/rest/v1/custom_tools?tool_id=eq.${encodeURIComponent(toolId)}&limit=1`,
+        { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` } }
+      );
+      if (dbResp.ok) {
+        const rows = await dbResp.json();
+        if (rows.length > 0) {
+          const row = rows[0];
+          customConfig = {
+            executionType: row.execution_type,
+            executionConfig: row.execution_config || {},
+          };
+        }
+      }
+    } catch {}
+
+    const execPayload: any = { tool: customConfig ? `custom_${toolId}` : name, args };
+    if (customConfig) execPayload.customConfig = customConfig;
+
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/cyber-execute`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
-      body: JSON.stringify({ tool: name, args }),
+      body: JSON.stringify(execPayload),
     });
     const data = await resp.json();
     return data.result || data.error || "لا توجد نتيجة";

@@ -546,30 +546,35 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   });
 }
 
-// Call AI with fallback keys
-async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }): Promise<{ response: Response; usedKeyIndex: number }> {
+// Call AI with fallback keys - always prioritize custom keys
+async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
   if (!customProvider?.apiKeys || customProvider.apiKeys.length <= 1) {
     const response = await callAI(messages, tools, stream, customProvider);
     return { response, usedKeyIndex: 0 };
   }
 
+  const errors: string[] = [];
   for (let i = 0; i < customProvider.apiKeys.length; i++) {
     const providerWithKey = { ...customProvider, apiKey: customProvider.apiKeys[i] };
     const response = await callAI(messages, tools, stream, providerWithKey);
     if (response.ok) return { response, usedKeyIndex: i };
     const status = response.status;
+    let errBody = "";
+    try { errBody = await response.text(); } catch {}
+    const maskedKey = customProvider.apiKeys[i].slice(0, 6) + "***" + customProvider.apiKeys[i].slice(-4);
+    errors.push(`المفتاح ${i + 1} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
     // Only fallback on auth/rate/payment errors
     if (status === 401 || status === 403 || status === 429 || status === 402) {
       console.log(`Key ${i + 1} failed with ${status}, trying next key...`);
       continue;
     }
     // For other errors, don't fallback
-    return { response, usedKeyIndex: i };
+    return { response, usedKeyIndex: i, errorDetails: errors.join("\n") };
   }
-  // All keys failed, return last attempt
+  // All keys failed
   const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[customProvider.apiKeys.length - 1] };
   const response = await callAI(messages, tools, stream, lastProvider);
-  return { response, usedKeyIndex: customProvider.apiKeys.length - 1 };
+  return { response, usedKeyIndex: customProvider.apiKeys.length - 1, errorDetails: errors.join("\n") };
 }
 
 // Parse Anthropic response to OpenAI-compatible format
@@ -641,7 +646,7 @@ serve(async (req) => {
             // Send progress info
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
 
-            const { response: aiResponse, usedKeyIndex } = await withTimeout(
+            const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
               callAIWithFallback(conversationMessages, aiTools, false, customProvider),
               Math.min(30_000, timeLeft()),
               "طلب AI"
@@ -656,10 +661,36 @@ serve(async (req) => {
               let errText = "";
               try { errText = await aiResponse.text(); } catch {}
               console.error(`AI provider error: ${status}`, errText);
-              if (status === 429) { send("⚠️ جميع المفاتيح تجاوزت حد الطلبات، يرجى الانتظار..."); break; }
-              if (status === 402) { send("⚠️ جميع المفاتيح بدون رصيد، يرجى إضافة رصيد"); break; }
-              if (status === 401 || status === 403) { send(`❌ جميع مفاتيح API غير صالحة (${status}). تحقق من المفاتيح في الإعدادات.`); break; }
-              send(`❌ خطأ من مزود الذكاء الاصطناعي (${status}): ${errText.slice(0, 200)}`); break;
+              
+              const providerName = customProvider?.providerId || "default";
+              const modelName = customProvider?.modelId || "default";
+              const keyCount = customProvider?.apiKeys?.length || 1;
+              
+              let detailMsg = `\n❌ **خطأ في الاتصال بالذكاء الاصطناعي**\n`;
+              detailMsg += `\n📌 **المزود:** ${providerName}`;
+              detailMsg += `\n🤖 **الموديل:** ${modelName}`;
+              detailMsg += `\n🔑 **عدد المفاتيح:** ${keyCount}`;
+              
+              if (status === 429) {
+                detailMsg += `\n\n⚠️ **السبب:** تجاوز حد الطلبات (Rate Limit) - جميع المفاتيح (${keyCount}) استنفدت حد الاستخدام`;
+                detailMsg += `\n💡 **الحل:** انتظر بضع دقائق أو أضف مفاتيح إضافية`;
+              } else if (status === 402) {
+                detailMsg += `\n\n⚠️ **السبب:** لا يوجد رصيد كافٍ - جميع المفاتيح (${keyCount}) بدون رصيد`;
+                detailMsg += `\n💡 **الحل:** أعد شحن الرصيد أو أضف مفتاح جديد برصيد`;
+              } else if (status === 401 || status === 403) {
+                detailMsg += `\n\n⚠️ **السبب:** مفاتيح API غير صالحة أو منتهية الصلاحية`;
+                detailMsg += `\n💡 **الحل:** تحقق من صحة المفاتيح في الإعدادات أو أنشئ مفاتيح جديدة`;
+              } else {
+                detailMsg += `\n\n⚠️ **السبب:** خطأ ${status}`;
+                detailMsg += `\n📄 **التفاصيل:** ${errText.slice(0, 300)}`;
+              }
+              
+              if (errorDetails) {
+                detailMsg += `\n\n📋 **تفاصيل كل مفتاح:**\n${errorDetails}`;
+              }
+              
+              send(detailMsg);
+              break;
             }
 
             const aiData = isAnthropic ? parseAnthropicResponse(await aiResponse.json()) : await aiResponse.json();

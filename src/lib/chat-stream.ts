@@ -19,12 +19,12 @@ export async function streamChat({
 }) {
   const providerSettings = await getAIProviderSettings();
   const body: any = { messages, customSystemPrompt };
-  if (providerSettings) {
+  if (providerSettings && providerSettings.enabled && providerSettings.apiKeys?.length > 0) {
     body.customProvider = {
       providerId: providerSettings.providerId,
       modelId: providerSettings.modelId,
       apiKey: providerSettings.apiKey,
-      apiKeys: providerSettings.apiKeys?.map(k => k.key) || [providerSettings.apiKey],
+      apiKeys: providerSettings.apiKeys.filter(k => k.key.trim()).map(k => k.key),
     };
   }
 

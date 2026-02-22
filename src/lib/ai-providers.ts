@@ -68,6 +68,19 @@ export const AI_PROVIDERS: AIProvider[] = [
       { id: "deepseek-reasoner", name: "DeepSeek Reasoner (R1)" },
     ],
   },
+  {
+    id: "groq",
+    name: "Groq",
+    nameAr: "جروك",
+    baseUrl: "https://api.groq.com/openai/v1/chat/completions",
+    models: [
+      { id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" },
+      { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
+      { id: "mixtral-8x7b-32768", name: "Mixtral 8x7B" },
+      { id: "gemma2-9b-it", name: "Gemma 2 9B" },
+      { id: "deepseek-r1-distill-llama-70b", name: "DeepSeek R1 70B" },
+    ],
+  },
 ];
 
 const PROVIDER_SETTINGS_KEY = "cyberguard-ai-provider";

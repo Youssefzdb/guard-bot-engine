@@ -38,18 +38,20 @@ export function AgentSettingsDialog() {
   useEffect(() => {
     if (open) {
       setPrompt(getAgentCustomPrompt());
-      const settings = getAIProviderSettings();
-      if (settings) {
-        setProviderEnabled(settings.enabled);
-        setSelectedProvider(settings.providerId);
-        setSelectedModel(settings.modelId);
-        setApiKeys(settings.apiKeys || [{ key: settings.apiKey || "", label: "مفتاح 1", status: "unknown" }]);
-      } else {
-        setProviderEnabled(false);
-        setSelectedProvider("openai");
-        setSelectedModel("");
-        setApiKeys([]);
-      }
+      (async () => {
+        const settings = await getAIProviderSettings();
+        if (settings) {
+          setProviderEnabled(settings.enabled);
+          setSelectedProvider(settings.providerId);
+          setSelectedModel(settings.modelId);
+          setApiKeys(settings.apiKeys || [{ key: settings.apiKey || "", label: "مفتاح 1", status: "unknown" }]);
+        } else {
+          setProviderEnabled(false);
+          setSelectedProvider("openai");
+          setSelectedModel("");
+          setApiKeys([]);
+        }
+      })();
       setShowKeys({});
     }
   }, [open]);
@@ -98,11 +100,11 @@ export function AgentSettingsDialog() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     localStorage.setItem(STORAGE_KEY, prompt);
     const validKeys = apiKeys.filter(k => k.key.trim());
     if (providerEnabled && validKeys.length > 0) {
-      saveAIProviderSettings({
+      await saveAIProviderSettings({
         providerId: selectedProvider,
         modelId: selectedModel,
         apiKey: validKeys[0].key,
@@ -110,18 +112,18 @@ export function AgentSettingsDialog() {
         enabled: true,
       });
     } else {
-      clearAIProviderSettings();
+      await clearAIProviderSettings();
     }
     toast({ title: "تم الحفظ", description: "تم حفظ جميع الإعدادات بنجاح" });
     setOpen(false);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     setPrompt("");
     setProviderEnabled(false);
     setApiKeys([]);
     localStorage.removeItem(STORAGE_KEY);
-    clearAIProviderSettings();
+    await clearAIProviderSettings();
     toast({ title: "تم إعادة التعيين", description: "تم إعادة الوكيل للإعدادات الافتراضية" });
   };
 
@@ -336,7 +338,7 @@ export function AgentSettingsDialog() {
                   </Button>
 
                   <p className="text-[10px] text-muted-foreground">
-                    المفاتيح تُحفظ محلياً في متصفحك فقط ولا تُرسل لأي خادم سوى المزود المختار.
+                    المفاتيح تُحفظ في قاعدة البيانات بشكل آمن.
                   </p>
                 </div>
 
@@ -344,7 +346,7 @@ export function AgentSettingsDialog() {
                 <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-muted-foreground space-y-1">
                   <p>⚡ عند التفعيل، سيستخدم الوكيل المزود والموديل المختار بدل الافتراضي.</p>
                   <p>🔄 عند فشل مفتاح (انتهاء الرصيد أو خطأ)، يتم تجربة المفتاح التالي تلقائياً.</p>
-                  <p>🔒 المفاتيح لا تُحفظ في أي خادم - تبقى في متصفحك فقط.</p>
+                  <p>🔒 المفاتيح تُحفظ في قاعدة البيانات بشكل آمن ومشفر.</p>
                 </div>
               </div>
             )}

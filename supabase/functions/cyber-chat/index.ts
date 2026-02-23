@@ -49,9 +49,12 @@ const SYSTEM_PROMPT = `أنت أداة اختبار اختراق احترافي�
 
 4. "custom_script" — الأقوى، JavaScript كامل يعمل في Deno:
    config.script يحتوي كود JavaScript حقيقي يُنفذ مباشرة
-   متاح لك: fetch (لأي طلب HTTP)، Deno (لـ DNS, TCP, filesystem)، args (معاملات المستخدم)، performance (للتوقيت)
+   متاح لك: fetch, Deno (لـ DNS, TCP)، args، performance، TextEncoder، TextDecoder، URL، URLSearchParams، Headers، console، setTimeout
    السكريبت يجب أن يُرجع (return) نتيجة نصية
    ⚡ هذا النوع يمكنه فعل أي شيء حرفياً: فحص، هجوم، دفاع، تحليل، تشفير، اتصال بأي API
+   🚫🚫🚫 ممنوع منعاً باتاً استخدام require() — هذا Node.js وليس Deno! استخدم fetch() و Deno APIs و Web APIs فقط
+   🚫 لا تستخدم: require(), Buffer, process, __dirname, module.exports — كلها Node.js ولا تعمل هنا
+   ✅ استخدم: fetch(), Deno.resolveDns(), Deno.connect(), new TextEncoder(), new URL(), crypto.subtle, etc.
 
 🧠 بروتوكول إنشاء الأدوات:
 عندما تحتاج أداة غير موجودة:

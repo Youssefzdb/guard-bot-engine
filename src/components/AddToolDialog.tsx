@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { Plus, X, Trash2, Upload, Download } from "lucide-react";
+import { Plus, X, Trash2, Upload, Download, Github, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { type ToolCategory } from "@/lib/security-tools";
-import { saveCustomTool, deleteCustomTool, fetchCustomTools, exportTools, importTools, type CustomToolDefinition } from "@/lib/custom-tools";
+import { saveCustomTool, deleteCustomTool, fetchCustomTools, exportTools, importTools, importToolsFromGitHub, type CustomToolDefinition } from "@/lib/custom-tools";
 import { useToast } from "@/hooks/use-toast";
 
 interface AddToolDialogProps {
@@ -24,7 +24,9 @@ const iconOptions = ["🔧", "⚡", "🛠️", "🔬", "🎯", "💣", "🕸️"
 
 export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"create" | "manage">("create");
+  const [tab, setTab] = useState<"create" | "manage" | "github">("create");
+  const [githubUrl, setGithubUrl] = useState("");
+  const [importing, setImporting] = useState(false);
   const [tool, setTool] = useState(defaultTool);
   const [args, setArgs] = useState(defaultTool.args);
   const [customTools, setCustomTools] = useState<CustomToolDefinition[]>([]);
@@ -115,12 +117,70 @@ export function AddToolDialog({ onToolsChanged }: AddToolDialogProps) {
           <button onClick={() => setTab("create")} className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-all ${tab === "create" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
             إنشاء أداة
           </button>
+          <button onClick={() => setTab("github")} className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-all ${tab === "github" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+            <span className="flex items-center justify-center gap-1"><Github className="w-3 h-3" /> GitHub</span>
+          </button>
           <button onClick={() => setTab("manage")} className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-all ${tab === "manage" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
             الأدوات ({customTools.length})
           </button>
         </div>
 
-        {tab === "create" ? (
+        {tab === "github" ? (
+          <div className="space-y-3">
+            <p className="text-[11px] text-muted-foreground">أدخل رابط ملف JSON للأدوات من GitHub وسيتم استيرادها تلقائياً.</p>
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-0.5 block">رابط GitHub</label>
+              <input
+                type="text"
+                value={githubUrl}
+                onChange={e => setGithubUrl(e.target.value)}
+                placeholder="https://github.com/user/repo/blob/main/tools.json"
+                className="w-full bg-background border border-border rounded px-2 py-1.5 text-xs font-mono"
+                dir="ltr"
+              />
+            </div>
+            <div className="p-2 bg-muted/50 rounded-lg space-y-1">
+              <p className="text-[10px] text-muted-foreground font-medium">📋 صيغة الملف المدعومة:</p>
+              <pre className="text-[9px] text-muted-foreground font-mono overflow-x-auto" dir="ltr">{`[{
+  "tool_id": "my_tool",
+  "name": "My Tool",
+  "name_ar": "أداتي",
+  "icon": "🔧",
+  "category": "scanning",
+  "description": "...",
+  "args": [{"key":"target","label":"الهدف","placeholder":"example.com","required":true}],
+  "execution_type": "http_fetch",
+  "execution_config": {"urlTemplate":"https://api.example.com/{target}","method":"GET"}
+}]`}</pre>
+            </div>
+            <button
+              onClick={async () => {
+                if (!githubUrl.trim()) {
+                  toast({ title: "خطأ", description: "أدخل رابط GitHub", variant: "destructive" });
+                  return;
+                }
+                setImporting(true);
+                try {
+                  const count = await importToolsFromGitHub(githubUrl);
+                  onToolsChanged();
+                  await loadTools();
+                  toast({ title: "تم", description: `تم استيراد ${count} أداة من GitHub` });
+                  setGithubUrl("");
+                  setTab("manage");
+                } catch (err) {
+                  toast({ title: "خطأ", description: err instanceof Error ? err.message : "فشل الاستيراد", variant: "destructive" });
+                } finally {
+                  setImporting(false);
+                }
+              }}
+              disabled={importing}
+              className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-lg py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
+              {importing ? "جاري الاستيراد..." : "استيراد من GitHub"}
+            </button>
+          </div>
+        ) : tab === "create" ? (
           <div className="space-y-3">
             <div>
               <label className="text-[11px] text-muted-foreground mb-1 block">الأيقونة</label>

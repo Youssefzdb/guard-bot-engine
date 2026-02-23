@@ -77,23 +77,42 @@ export function exportTools(tools: CustomToolDefinition[]): string {
 
 export async function importTools(json: string): Promise<number> {
   const imported = JSON.parse(json);
-  if (!Array.isArray(imported)) throw new Error("صيغة غير صالحة");
+  const arr = Array.isArray(imported) ? imported : imported.tools;
+  if (!Array.isArray(arr)) throw new Error("صيغة غير صالحة");
   let count = 0;
-  for (const t of imported) {
-    if (t.tool_id && t.name && t.name_ar) {
+  for (const t of arr) {
+    const toolId = t.tool_id || t.id || t.name?.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    const nameAr = t.name_ar || t.nameAr || t.name || "";
+    if (toolId && (t.name || nameAr)) {
       await saveCustomTool({
-        tool_id: t.tool_id,
-        name: t.name,
-        name_ar: t.name_ar,
+        tool_id: toolId,
+        name: t.name || nameAr,
+        name_ar: nameAr || t.name,
         icon: t.icon || "🔧",
         description: t.description || "",
         category: t.category || "scanning",
         args: t.args || [],
-        execution_type: t.execution_type || "http_fetch",
-        execution_config: t.execution_config || {},
+        execution_type: t.execution_type || t.executionType || "http_fetch",
+        execution_config: t.execution_config || t.executionConfig || {},
       });
       count++;
     }
   }
   return count;
+}
+
+export async function importToolsFromGitHub(url: string): Promise<number> {
+  // Convert GitHub blob URL to raw
+  let rawUrl = url.trim();
+  if (rawUrl.includes("github.com") && rawUrl.includes("/blob/")) {
+    rawUrl = rawUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+  } else if (rawUrl.includes("github.com") && !rawUrl.includes("raw.githubusercontent.com")) {
+    // Try converting tree URLs or direct paths
+    rawUrl = rawUrl.replace("github.com", "raw.githubusercontent.com").replace("/tree/", "/");
+  }
+
+  const resp = await fetch(rawUrl);
+  if (!resp.ok) throw new Error(`فشل جلب الملف: ${resp.status} ${resp.statusText}`);
+  const text = await resp.text();
+  return importTools(text);
 }

@@ -692,6 +692,16 @@ const PROVIDER_CONFIGS: Record<string, { baseUrl: string; authHeader: (key: stri
   groq: { baseUrl: "https://api.groq.com/openai/v1/chat/completions", authHeader: (k) => ({ Authorization: `Bearer ${k}` }) },
 };
 
+// Default model per provider for fallback
+const DEFAULT_MODELS: Record<string, string> = {
+  openai: "gpt-4o",
+  google: "gemini-2.5-flash",
+  anthropic: "claude-3-5-haiku-20241022",
+  xai: "grok-3-mini",
+  deepseek: "deepseek-chat",
+  groq: "llama-3.3-70b-versatile",
+};
+
 async function callAI(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }) {
   if (customProvider && customProvider.apiKey) {
     const config = PROVIDER_CONFIGS[customProvider.providerId];
@@ -737,62 +747,92 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
 }
 
 // Call AI with fallback keys, smart queue, and retry with backoff
-async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[] }, startFromKey = 0): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
+async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[]; allProviderKeys?: { providerId: string; keys: string[] }[] }, startFromKey = 0): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
   // Smart queue: wait for turn before making request
   await requestQueue.waitTurn();
 
-  if (!customProvider?.apiKeys || customProvider.apiKeys.length <= 1) {
-    const response = await callAI(messages, tools, stream, customProvider);
-    if (response.ok) { requestQueue.onSuccess(); }
-    else if (response.status === 429) { requestQueue.onRateLimit(); }
+  // Build a flat list of all attempts: [{providerId, modelId, apiKey}, ...]
+  const attempts: { providerId: string; modelId: string; apiKey: string }[] = [];
+  
+  if (customProvider?.allProviderKeys && customProvider.allProviderKeys.length > 0) {
+    // Use allProviderKeys - try all providers and all their keys
+    for (const providerEntry of customProvider.allProviderKeys) {
+      const modelId = providerEntry.providerId === customProvider.providerId 
+        ? customProvider.modelId 
+        : (DEFAULT_MODELS[providerEntry.providerId] || customProvider.modelId);
+      for (const key of providerEntry.keys) {
+        attempts.push({ providerId: providerEntry.providerId, modelId, apiKey: key });
+      }
+    }
+  } else if (customProvider?.apiKeys && customProvider.apiKeys.length > 0) {
+    // Legacy: only current provider keys
+    for (const key of customProvider.apiKeys) {
+      attempts.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, apiKey: key });
+    }
+  } else if (customProvider?.apiKey) {
+    attempts.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, apiKey: customProvider.apiKey });
+  }
+
+  if (attempts.length === 0) {
+    // No custom provider, use default Lovable AI
+    const response = await callAI(messages, tools, stream);
+    if (response.ok) requestQueue.onSuccess();
     return { response, usedKeyIndex: 0 };
   }
 
-  const errors: string[] = [];
-  const keyCount = customProvider.apiKeys.length;
+  // Reorder: start from startFromKey
+  const reordered = [...attempts.slice(startFromKey % attempts.length), ...attempts.slice(0, startFromKey % attempts.length)];
   
-  for (let attempt = 0; attempt < keyCount; attempt++) {
-    const i = (startFromKey + attempt) % keyCount;
-    const providerWithKey = { ...customProvider, apiKey: customProvider.apiKeys[i] };
-    
-    // Add delay between key attempts on rate limit
-    if (attempt > 0) {
-      const retryDelay = Math.min(3000, 500 * attempt);
+  const errors: string[] = [];
+
+  for (let i = 0; i < reordered.length; i++) {
+    const attempt = reordered[i];
+    const config = PROVIDER_CONFIGS[attempt.providerId];
+    if (!config) continue;
+
+    // Add delay between attempts on rate limit
+    if (i > 0) {
+      const retryDelay = Math.min(3000, 500 * i);
       await new Promise(r => setTimeout(r, retryDelay));
     }
-    
+
+    const providerWithKey = { providerId: attempt.providerId, modelId: attempt.modelId, apiKey: attempt.apiKey, apiKeys: [attempt.apiKey] };
     const response = await callAI(messages, tools, stream, providerWithKey);
+    
     if (response.ok) {
       requestQueue.onSuccess();
-      return { response, usedKeyIndex: i };
+      const originalIndex = attempts.indexOf(attempt);
+      return { response, usedKeyIndex: originalIndex };
     }
+    
     const status = response.status;
     let errBody = "";
     try { errBody = await response.text(); } catch {}
-    const maskedKey = customProvider.apiKeys[i].slice(0, 6) + "***" + customProvider.apiKeys[i].slice(-4);
-    errors.push(`المفتاح ${i + 1} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
-    
+    const maskedKey = attempt.apiKey.slice(0, 6) + "***" + attempt.apiKey.slice(-4);
+    errors.push(`${attempt.providerId}/${attempt.modelId} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
+
     if (status === 429) {
       requestQueue.onRateLimit();
-      console.log(`Key ${i + 1} hit rate limit, backing off ${requestQueue.getDelay()}ms...`);
+      console.log(`${attempt.providerId} key hit rate limit, trying next...`);
       continue;
     }
     if (status === 401 || status === 403 || status === 402) {
-      console.log(`Key ${i + 1} failed with ${status}, trying next key silently...`);
+      console.log(`${attempt.providerId} key failed with ${status}, trying next...`);
       continue;
     }
-    return { response, usedKeyIndex: i, errorDetails: errors.join("\n") };
+    return { response, usedKeyIndex: attempts.indexOf(attempt), errorDetails: errors.join("\n") };
   }
-  
-  // All keys exhausted - wait with backoff then retry first key once more
+
+  // All keys/providers exhausted - final retry with backoff
   const backoffMs = requestQueue.getDelay();
-  console.log(`All keys failed, waiting ${backoffMs}ms before final retry...`);
+  console.log(`All providers/keys failed, waiting ${backoffMs}ms before final retry...`);
   await new Promise(r => setTimeout(r, backoffMs));
-  
-  const lastProvider = { ...customProvider, apiKey: customProvider.apiKeys[startFromKey % keyCount] };
+
+  const firstAttempt = reordered[0];
+  const lastProvider = { providerId: firstAttempt.providerId, modelId: firstAttempt.modelId, apiKey: firstAttempt.apiKey, apiKeys: [firstAttempt.apiKey] };
   const response = await callAI(messages, tools, stream, lastProvider);
   if (response.ok) requestQueue.onSuccess();
-  return { response, usedKeyIndex: startFromKey % keyCount, errorDetails: errors.join("\n") };
+  return { response, usedKeyIndex: 0, errorDetails: errors.join("\n") };
 }
 
 // Parse Anthropic response to OpenAI-compatible format

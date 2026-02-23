@@ -40,7 +40,8 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
 
   const handleRun = async (tool: SecurityTool) => {
     const args = formData[tool.id] || {};
-    const missing = tool.args.filter(a => a.required && !args[a.key]?.trim());
+    const toolArgs = Array.isArray(tool.args) ? tool.args : [];
+    const missing = toolArgs.filter(a => a.required && !args[a.key]?.trim());
     if (missing.length > 0) return;
 
     setLoading(tool.id);
@@ -114,7 +115,7 @@ export function ToolsPanel({ onResult }: ToolsPanelProps) {
             {expanded === tool.id && (
               <div className="px-3 pb-3 space-y-2 border-t border-border pt-2">
                 <p className="text-[11px] text-muted-foreground">{tool.description}</p>
-                {tool.args.map((arg) => (
+                {(Array.isArray(tool.args) ? tool.args : []).map((arg) => (
                   <div key={arg.key}>
                     <label className="text-[10px] text-muted-foreground mb-0.5 block">{arg.label}</label>
                     <input

@@ -15,6 +15,11 @@ export interface CustomToolDefinition {
 }
 
 export function mapToSecurityTool(t: CustomToolDefinition): SecurityTool {
+  let parsedArgs = t.args;
+  if (typeof parsedArgs === "string") {
+    try { parsedArgs = JSON.parse(parsedArgs); } catch { parsedArgs = []; }
+  }
+  if (!Array.isArray(parsedArgs)) parsedArgs = [];
   return {
     id: `custom_${t.tool_id}`,
     name: t.name,
@@ -22,7 +27,7 @@ export function mapToSecurityTool(t: CustomToolDefinition): SecurityTool {
     icon: t.icon,
     description: t.description,
     category: t.category as ToolCategory,
-    args: t.args as SecurityTool["args"],
+    args: parsedArgs as SecurityTool["args"],
   };
 }
 

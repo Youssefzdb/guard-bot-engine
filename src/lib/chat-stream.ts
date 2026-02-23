@@ -19,20 +19,22 @@ export async function streamChat({
 }) {
   const providerSettings = await getAIProviderSettings();
   const body: any = { messages, customSystemPrompt };
+
+  // Build allProviderKeys from ALL providers that have keys, regardless of enabled state
+  const allProviderKeys: { providerId: string; keys: string[] }[] = [];
+  if (providerSettings) {
+    for (const [pid, keys] of Object.entries(providerSettings.providerKeys || {})) {
+      const validKeys = (keys || []).filter(k => k.key.trim()).map(k => k.key);
+      if (validKeys.length > 0) {
+        allProviderKeys.push({ providerId: pid, keys: validKeys });
+      }
+    }
+  }
+
   if (providerSettings && providerSettings.enabled) {
     const activeKeys = (providerSettings.providerKeys?.[providerSettings.providerId] || []).filter(k => k.key.trim());
     if (activeKeys.length > 0) {
-      // Build allProviderKeys: array of { providerId, modelId, keys[] } for fallback across providers
-      const allProviderKeys: { providerId: string; keys: string[] }[] = [];
-      for (const [pid, keys] of Object.entries(providerSettings.providerKeys || {})) {
-        const validKeys = (keys || []).filter(k => k.key.trim()).map(k => k.key);
-        if (validKeys.length > 0) {
-          allProviderKeys.push({ providerId: pid, keys: validKeys });
-        }
-      }
-      // Put current provider first
       allProviderKeys.sort((a, b) => a.providerId === providerSettings.providerId ? -1 : b.providerId === providerSettings.providerId ? 1 : 0);
-
       body.customProvider = {
         providerId: providerSettings.providerId,
         modelId: providerSettings.modelId,
@@ -41,6 +43,9 @@ export async function streamChat({
         allProviderKeys,
       };
     }
+  } else if (allProviderKeys.length > 0) {
+    // Custom provider disabled but keys exist - send as fallback when default fails
+    body.fallbackProviderKeys = allProviderKeys;
   }
 
   const resp = await fetch(CHAT_URL, {

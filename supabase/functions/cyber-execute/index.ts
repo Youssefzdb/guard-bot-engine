@@ -1490,12 +1490,19 @@ async function executeCustomTool(args: Record<string, string>, config: { executi
 
   try {
     if (executionType === "http_fetch") {
-      let url = executionConfig.urlTemplate || "";
+      let url = executionConfig.urlTemplate || executionConfig.url_template || executionConfig.url || executionConfig.endpoint || "";
+      // If still no URL, try to build from args (target/url)
+      if (!url && (args.url || args.target)) {
+        url = args.url || args.target || "";
+        // Ensure it has a protocol
+        if (url && !url.startsWith("http")) url = "https://" + url;
+      }
       // Replace placeholders with args
       for (const [key, value] of Object.entries(args)) {
         url = url.replace(`{${key}}`, encodeURIComponent(value));
+        url = url.replace(`{{${key}}}`, encodeURIComponent(value));
       }
-      if (!url) return "❌ لم يتم تحديد URL";
+      if (!url) return "❌ لم يتم تحديد URL - تأكد من إدخال الهدف";
       const method = executionConfig.method || "GET";
       const resp = await fetch(url, { method, redirect: "follow" });
       const text = await resp.text();

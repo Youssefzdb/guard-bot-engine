@@ -1530,14 +1530,16 @@ async function executeCustomTool(args: Record<string, string>, config: { executi
         results.push(`❌ فشل الاتصال: ${e instanceof Error ? e.message : "خطأ"}`);
       }
     } else if (executionType === "custom_script") {
-      // For security, custom scripts are executed as HTTP fetch with the script as context
-      const script = executionConfig.script || "";
+      let script = executionConfig.script || "";
       if (!script) return "❌ لم يتم تحديد سكريبت";
       results.push(`📜 تنفيذ سكريبت مخصص...`);
-      // Execute the script in a controlled manner
+      // Strip any require() calls - they don't work in Deno
+      script = script.replace(/(?:const|let|var)\s+\w+\s*=\s*require\s*\([^)]*\)\s*;?/g, "// require removed");
+      script = script.replace(/require\s*\([^)]*\)/g, "undefined /* require not available */");
       try {
-        const fn = new Function("args", "fetch", "Deno", `return (async () => { ${script} })();`);
-        const output = await fn(args, fetch, Deno);
+        const fn = new Function("args", "fetch", "Deno", "performance", "TextEncoder", "TextDecoder", "URL", "URLSearchParams", "Headers", "Response", "Request", "AbortController", "setTimeout", "console",
+          `return (async () => { ${script} })();`);
+        const output = await fn(args, fetch, Deno, performance, TextEncoder, TextDecoder, URL, URLSearchParams, Headers, Response, Request, AbortController, setTimeout, console);
         results.push(String(output || "✅ تم التنفيذ بنجاح"));
       } catch (e) {
         results.push(`❌ خطأ في السكريبت: ${e instanceof Error ? e.message : "خطأ"}`);

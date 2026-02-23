@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Settings, Eye, EyeOff, Cpu, Plus, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { Settings, Eye, EyeOff, Cpu, Plus, Trash2, RefreshCw, CheckCircle, XCircle, AlertCircle, Shield } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { AI_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings, type APIKeyEntry, type ProviderKeysMap } from "@/lib/ai-providers";
+import { AI_PROVIDERS, SECURITY_API_PROVIDERS, getAIProviderSettings, saveAIProviderSettings, clearAIProviderSettings, type AIProviderSettings, type APIKeyEntry, type ProviderKeysMap } from "@/lib/ai-providers";
 
 const STORAGE_KEY = "cyberguard-agent-settings";
 
@@ -252,9 +252,10 @@ export function AgentSettingsDialog() {
         </DialogHeader>
 
         <Tabs defaultValue="prompt" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="prompt">🧠 شخصية الوكيل</TabsTrigger>
             <TabsTrigger value="ai">🤖 مزود الذكاء</TabsTrigger>
+            <TabsTrigger value="security">🛡️ APIs أمنية</TabsTrigger>
           </TabsList>
 
           <TabsContent value="prompt" className="space-y-3 mt-4">
@@ -358,6 +359,38 @@ export function AgentSettingsDialog() {
                 <p>🔄 عند فشل مفتاح (انتهاء الرصيد أو خطأ)، يتم تجربة المفتاح التالي تلقائياً.</p>
                 <p>🔑 كل مزود يحتفظ بمفاتيحه بشكل مستقل.</p>
               </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="security" className="space-y-4 mt-4">
+            <div className="p-3 rounded-lg border border-border bg-muted/30">
+              <div className="flex items-center gap-2 mb-2">
+                <Shield className="w-4 h-4 text-primary" />
+                <p className="text-sm font-medium text-foreground">مفاتيح APIs الأمنية</p>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                أضف مفاتيح API لخدمات الأمان الخارجية. الوكيل والأدوات ستستخدمها تلقائياً.
+              </p>
+            </div>
+
+            {SECURITY_API_PROVIDERS.map(provider => (
+              <div key={provider.id} className="space-y-3 p-3 rounded-lg border border-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{provider.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{provider.description}</p>
+                  </div>
+                  <a href={provider.apiKeyUrl} target="_blank" rel="noopener noreferrer"
+                    className="text-[11px] text-primary hover:underline">🔑 احصل على مفتاح</a>
+                </div>
+                {renderProviderKeys(provider.id)}
+              </div>
+            ))}
+
+            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs text-muted-foreground space-y-1">
+              <p>🛡️ مفاتيح VirusTotal تُستخدم تلقائياً في جميع الأدوات المستوردة من GitHub.</p>
+              <p>🔄 عند فشل مفتاح، يتم تجربة المفتاح التالي تلقائياً.</p>
+              <p>♾️ يمكنك إضافة عدد غير محدود من المفاتيح.</p>
             </div>
           </TabsContent>
         </Tabs>

@@ -1483,21 +1483,65 @@ tools.rate_limit_test = async (args) => {
   return results.join("\n");
 };
 
-// VirusTotal API helper
+// VirusTotal API helper with key rotation from DB
+async function getVTApiKeys(): Promise<string[]> {
+  const keys: string[] = [];
+  // 1. Check env secret
+  const envKey = Deno.env.get("VIRUSTOTAL_API_KEY");
+  if (envKey) keys.push(envKey);
+  // 2. Check DB for user-added keys
+  try {
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/ai_provider_settings?limit=1`, {
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (resp.ok) {
+      const rows = await resp.json();
+      if (rows.length > 0) {
+        const apiKeys = rows[0].api_keys;
+        // apiKeys is a ProviderKeysMap: { virustotal: [{key, label, ...}] }
+        const vtKeys = apiKeys?.virustotal || apiKeys?.["virustotal"] || [];
+        if (Array.isArray(vtKeys)) {
+          for (const entry of vtKeys) {
+            const k = typeof entry === "string" ? entry : entry?.key;
+            if (k && !keys.includes(k)) keys.push(k);
+          }
+        }
+      }
+    }
+  } catch {}
+  return keys;
+}
+
+let vtKeyIndex = 0;
 async function vtApiCall(endpoint: string, method = "GET", body?: string): Promise<any> {
-  const apiKey = Deno.env.get("VIRUSTOTAL_API_KEY");
-  if (!apiKey) throw new Error("مفتاح VirusTotal API غير مُعد");
-  const opts: RequestInit = {
-    method,
-    headers: { "x-apikey": apiKey, "Content-Type": "application/x-www-form-urlencoded" },
-  };
-  if (body) opts.body = body;
-  const resp = await fetch(`https://www.virustotal.com/api/v3/${endpoint}`, opts);
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`VT API ${resp.status}: ${errText.substring(0, 200)}`);
+  const keys = await getVTApiKeys();
+  if (keys.length === 0) throw new Error("لم يتم تعيين أي مفتاح VirusTotal API — أضف مفاتيح من الإعدادات");
+  
+  // Try keys with rotation
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const keyIdx = (vtKeyIndex + attempt) % keys.length;
+    const apiKey = keys[keyIdx];
+    const opts: RequestInit = {
+      method,
+      headers: { "x-apikey": apiKey, "Content-Type": "application/x-www-form-urlencoded" },
+    };
+    if (body) opts.body = body;
+    const resp = await fetch(`https://www.virustotal.com/api/v3/${endpoint}`, opts);
+    if (resp.status === 429 || resp.status === 403) {
+      // Rate limited or forbidden - try next key
+      await resp.text();
+      continue;
+    }
+    vtKeyIndex = (keyIdx + 1) % keys.length; // rotate for next call
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`VT API ${resp.status}: ${errText.substring(0, 200)}`);
+    }
+    return resp.json();
   }
-  return resp.json();
+  throw new Error("جميع مفاتيح VirusTotal مستنفدة (429) — أضف مفاتيح إضافية من الإعدادات");
 }
 
 // Determine the best VirusTotal scan type based on input
@@ -2205,6 +2249,114 @@ tools.cve_search = async (args) => {
       await resp.text();
     }
   } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+// ===== VIRUSTOTAL TOOLS =====
+
+tools.vt_scan_url = async (args) => {
+  const { url } = args;
+  if (!url) return "❌ مطلوب: url";
+  const results: string[] = [`🛡️ VirusTotal - فحص رابط\n${"─".repeat(40)}\n🎯 ${url}\n`];
+  try {
+    // Submit URL
+    const scanResp = await vtApiCall("urls", "POST", `url=${encodeURIComponent(url)}`);
+    const analysisId = scanResp?.data?.id;
+    await new Promise(r => setTimeout(r, 5000));
+    
+    if (analysisId) {
+      try {
+        const analysis = await vtApiCall(`analyses/${analysisId}`);
+        const stats = analysis?.data?.attributes?.stats || {};
+        const total = Object.values(stats).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+        results.push(`📊 نتائج (${total} محرك):`);
+        results.push(`  🔴 خبيث: ${stats.malicious || 0} | 🟡 مشبوه: ${stats.suspicious || 0}`);
+        results.push(`  🟢 آمن: ${stats.harmless || 0} | ⚪ غير مكتشف: ${stats.undetected || 0}`);
+        results.push(`\n🛡️ ${(stats.malicious || 0) > 0 ? "⚠️ تهديدات مكتشفة!" : "✅ آمن"}`);
+        
+        // Show malicious engines
+        const analysisResults = analysis?.data?.attributes?.results || {};
+        const malEngines = Object.entries(analysisResults)
+          .filter(([, v]: [string, any]) => v.category === "malicious" || v.category === "suspicious")
+          .slice(0, 10);
+        if (malEngines.length > 0) {
+          results.push(`\n🚨 محركات اكتشفت تهديدات:`);
+          malEngines.forEach(([eng, v]: [string, any]) => results.push(`  ⚠️ ${eng}: ${v.result || v.category}`));
+        }
+      } catch { results.push(`⏳ التحليل جاري... أعد المحاولة`); }
+    }
+    
+    // Also get cached report
+    const urlId = btoa(url).replace(/=/g, "");
+    try {
+      const report = await vtApiCall(`urls/${urlId}`);
+      results.push(...formatVTResults(report, "url", url));
+    } catch {}
+  } catch (e) { results.push(`❌ ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.vt_scan_domain = async (args) => {
+  const { domain } = args;
+  if (!domain) return "❌ مطلوب: domain";
+  const results: string[] = [`🛡️ VirusTotal - تحليل نطاق\n${"─".repeat(40)}\n🎯 ${domain}\n`];
+  try {
+    const data = await vtApiCall(`domains/${domain}`);
+    results.push(...formatVTResults(data, "domain", domain));
+    // Subdomains
+    try {
+      const subs = await vtApiCall(`domains/${domain}/subdomains?limit=20`);
+      if (subs?.data?.length > 0) {
+        results.push(`\n🔍 النطاقات الفرعية (${subs.data.length}):`);
+        subs.data.forEach((s: any) => results.push(`  → ${s.id}`));
+      }
+    } catch {}
+  } catch (e) { results.push(`❌ ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.vt_scan_ip = async (args) => {
+  const { ip } = args;
+  if (!ip) return "❌ مطلوب: ip";
+  const results: string[] = [`🛡️ VirusTotal - تحليل IP\n${"─".repeat(40)}\n🎯 ${ip}\n`];
+  try {
+    const data = await vtApiCall(`ip_addresses/${ip}`);
+    results.push(...formatVTResults(data, "ip", ip));
+  } catch (e) { results.push(`❌ ${e instanceof Error ? e.message : "خطأ"}`); }
+  return results.join("\n");
+};
+
+tools.vt_scan_file_hash = async (args) => {
+  const { hash } = args;
+  if (!hash) return "❌ مطلوب: hash (MD5, SHA1, or SHA256)";
+  const results: string[] = [`🛡️ VirusTotal - فحص ملف\n${"─".repeat(40)}\n🔑 Hash: ${hash}\n`];
+  try {
+    const data = await vtApiCall(`files/${hash}`);
+    const attrs = data?.data?.attributes || {};
+    const stats = attrs.last_analysis_stats || {};
+    const total = Object.values(stats).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+    
+    results.push(`📁 الملف: ${attrs.meaningful_name || attrs.names?.[0] || "غير معروف"}`);
+    results.push(`📏 الحجم: ${attrs.size ? `${(attrs.size / 1024).toFixed(1)} KB` : "غير معروف"}`);
+    results.push(`📦 النوع: ${attrs.type_description || attrs.magic || "غير معروف"}`);
+    
+    results.push(`\n📊 نتائج (${total} محرك):`);
+    results.push(`  🔴 خبيث: ${stats.malicious || 0} | 🟡 مشبوه: ${stats.suspicious || 0}`);
+    results.push(`  🟢 آمن: ${stats.harmless || 0} | ⚪ غير مكتشف: ${stats.undetected || 0}`);
+    results.push(`\n🛡️ ${(stats.malicious || 0) > 0 ? "⚠️ ملف خبيث!" : "✅ آمن"}`);
+    
+    if (attrs.popular_threat_classification?.suggested_threat_label) {
+      results.push(`\n🏷️ التصنيف: ${attrs.popular_threat_classification.suggested_threat_label}`);
+    }
+    
+    const malEngines = Object.entries(attrs.last_analysis_results || {})
+      .filter(([, v]: [string, any]) => v.category === "malicious")
+      .slice(0, 10);
+    if (malEngines.length > 0) {
+      results.push(`\n🚨 محركات مكتشفة:`);
+      malEngines.forEach(([eng, v]: [string, any]) => results.push(`  ⚠️ ${eng}: ${v.result}`));
+    }
+  } catch (e) { results.push(`❌ ${e instanceof Error ? e.message : "خطأ"}`); }
   return results.join("\n");
 };
 

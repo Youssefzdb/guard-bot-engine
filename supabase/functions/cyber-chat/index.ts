@@ -128,6 +128,13 @@ const SYSTEM_PROMPT = `أنت أداة اختبار اختراق احترافي�
 - يمكنك استخدام عدة أدوات في نفس الرد
 - النتائج حقيقية من تنفيذ فعلي
 
+🛡️ أدوات VirusTotal المدمجة:
+- vt_scan_url: فحص رابط عبر 70+ محرك مكافحة فيروسات
+- vt_scan_domain: تحليل نطاق شامل (سمعة، DNS، SSL، نطاقات فرعية)
+- vt_scan_ip: تحليل عنوان IP (ASN، دولة، سمعة، تهديدات)
+- vt_scan_file_hash: فحص ملف عبر hash
+⚡ استخدم أدوات VirusTotal دائماً في الفحوصات الشاملة — هي تعمل بمفاتيح API المُعدة في الإعدادات مع دوران تلقائي بين المفاتيح.
+
 لديك أدوات لإدارة بوت تيليجرام:
 - telegram_add_command, telegram_remove_command, telegram_list_commands, telegram_bot_status
 - telegram_send_file, telegram_send_photo
@@ -300,6 +307,11 @@ const aiTools = [
       body: { type: "string", description: "محتوى الرسالة (HTML أو نص)" }, 
       file_url: { type: "string", description: "رابط الملف المرفق (اختياري)" },
       file_name: { type: "string", description: "اسم الملف المرفق (اختياري)" } }, ["to", "subject", "body"]),
+  // VIRUSTOTAL TOOLS
+  mkTool("vt_scan_url", "فحص رابط عبر VirusTotal (70+ محرك مكافحة فيروسات)", { url: { type: "string" } }, ["url"]),
+  mkTool("vt_scan_domain", "تحليل نطاق عبر VirusTotal (سمعة، DNS، شهادة SSL، نطاقات فرعية)", { domain: { type: "string" } }, ["domain"]),
+  mkTool("vt_scan_ip", "تحليل عنوان IP عبر VirusTotal (ASN، دولة، سمعة)", { ip: { type: "string" } }, ["ip"]),
+  mkTool("vt_scan_file_hash", "فحص ملف عبر hash في VirusTotal", { hash: { type: "string" } }, ["hash"]),
   // MEMORY & REPORTING
   mkTool("recall_target", "استرجاع نتائج فحوصات سابقة لهدف معين من الذاكرة", { target: { type: "string" } }, ["target"]),
   mkTool("save_scan_result", "حفظ نتيجة فحص في الذاكرة للرجوع إليها لاحقاً", 

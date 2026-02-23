@@ -79,8 +79,25 @@ serve(async (req) => {
       if (resp.status === 401) status = "invalid";
       else if (resp.ok) { status = "valid"; balance = "✓ صالح"; }
       else status = "invalid";
+    } else if (providerId === "virustotal") {
+      const resp = await fetch("https://www.virustotal.com/api/v3/users/me", {
+        headers: { "x-apikey": apiKey },
+      });
+      if (resp.status === 401 || resp.status === 403) status = "invalid";
+      else if (resp.ok) {
+        const data = await resp.json();
+        const quotas = data?.data?.attributes?.quotas;
+        if (quotas?.api_requests_daily) {
+          const used = quotas.api_requests_daily.used || 0;
+          const allowed = quotas.api_requests_daily.allowed || 500;
+          balance = `${used}/${allowed} يومي`;
+          status = used < allowed ? "valid" : "no_balance";
+        } else {
+          status = "valid";
+          balance = "✓ صالح";
+        }
+      } else status = "invalid";
     } else {
-      // Generic test - try models endpoint
       status = "valid";
       balance = "غير متاح";
     }

@@ -920,7 +920,7 @@ serve(async (req) => {
         try {
           let round = 0;
           let conversationMessages = [...budgetedMessages];
-          // Round-robin distributes keys evenly via globalKeyCounter
+          // Each round uses a different key: round 1 → key 0, round 2 → key 1, etc.
 
           while (round < MAX_ROUNDS) {
             if (closed || timeLeft() < 15_000) {
@@ -937,14 +937,17 @@ serve(async (req) => {
             
             round++;
 
-            // Send progress info
+            // Send progress info with key assignment
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
+            send(`\n🔑 **الجولة ${round}** — مفتاح #${round}\n`);
             
             // Record token usage for this request
             recordTokenUsage(estimateTokens(JSON.stringify(conversationMessages)) + 1024);
 
+            // Assign this round to a specific key (round-based distribution)
+            const keyIndexForRound = (round - 1); // round 1→key 0, round 2→key 1, etc.
             const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
-              callAIWithFallback(conversationMessages, aiTools, false, effectiveProvider),
+              callAIWithFallback(conversationMessages, aiTools, false, effectiveProvider, keyIndexForRound),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );

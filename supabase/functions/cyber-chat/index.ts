@@ -134,6 +134,8 @@ const SYSTEM_PROMPT = `أنت أداة اختبار اختراق احترافي�
 - response يدعم {name} {date} {time} {args}
 
 لديك أداة add_custom_tool لإضافة أدوات مخصصة جديدة.
+لديك أدوات delete_custom_tool و list_custom_tools و update_custom_tool لإدارة الأدوات المخصصة.
+لديك أداة import_tools_from_github لاستيراد أدوات من ملف JSON على GitHub — تدعم الروابط العادية وraw وتضيف كل الأدوات تلقائياً.
 
 لديك أداة send_file_to_user لإرسال ملفات مباشرة في الشات.
 
@@ -285,6 +287,10 @@ const aiTools = [
       description: { type: "string" }, category: { type: "string" }, execution_type: { type: "string" },
       config: { type: "string", description: "JSON STRING" }, args_def: { type: "string", description: "JSON STRING" } },
     ["tool_id"]),
+  mkTool("import_tools_from_github", "استيراد أدوات مخصصة من ملف JSON على GitHub — يجلب الملف ويضيف كل الأدوات تلقائياً. يدعم روابط GitHub العادية وraw", 
+    { github_url: { type: "string", description: "رابط ملف JSON على GitHub (عادي أو raw)" }, 
+      category_filter: { type: "string", description: "فلترة بالتصنيف (scanning/offensive/defensive) — اختياري" } },
+    ["github_url"]),
   // FILE SENDING
   mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
     { file_url: { type: "string" }, file_name: { type: "string" }, description: { type: "string" } }, ["file_url", "file_name"]),
@@ -548,6 +554,72 @@ async function sendEmail(args: Record<string, string>): Promise<string> {
   }
 }
 
+async function importToolsFromGitHub(args: Record<string, string>): Promise<string> {
+  try {
+    let { github_url, category_filter } = args;
+    if (!github_url) return "❌ يجب تقديم رابط GitHub";
+
+    // Convert GitHub URL to raw URL if needed
+    let rawUrl = github_url;
+    if (rawUrl.includes("github.com") && !rawUrl.includes("raw.githubusercontent.com")) {
+      rawUrl = rawUrl
+        .replace("github.com", "raw.githubusercontent.com")
+        .replace("/blob/", "/");
+    }
+
+    const resp = await fetch(rawUrl, {
+      headers: { "User-Agent": "CyberGuard-AI/2.0", "Accept": "application/json, text/plain, */*" },
+    });
+    if (!resp.ok) return `❌ فشل جلب الملف: HTTP ${resp.status} ${resp.statusText}\nالرابط: ${rawUrl}`;
+
+    const text = await resp.text();
+    let tools: any[];
+    try {
+      const parsed = JSON.parse(text);
+      tools = Array.isArray(parsed) ? parsed : (parsed.tools && Array.isArray(parsed.tools) ? parsed.tools : []);
+    } catch {
+      return `❌ الملف ليس JSON صالح`;
+    }
+
+    if (tools.length === 0) return "❌ لم يتم العثور على أدوات في الملف";
+
+    let added = 0, skipped = 0, errors = 0;
+    const results: string[] = [];
+
+    for (const t of tools) {
+      if (!t.tool_id && !t.id && !t.name) { skipped++; continue; }
+      if (category_filter && t.category && t.category !== category_filter) { skipped++; continue; }
+
+      const toolId = t.tool_id || t.id || t.name?.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const nameAr = t.name_ar || t.nameAr || t.name || toolId;
+      const toolName = t.name || toolId;
+      const category = ["scanning", "offensive", "defensive"].includes(t.category) ? t.category : "scanning";
+      const execType = t.execution_type || t.executionType || "http_fetch";
+      let execConfig = t.execution_config || t.executionConfig || t.config || {};
+      if (typeof execConfig === "string") { try { execConfig = JSON.parse(execConfig); } catch { execConfig = {}; } }
+      let toolArgs = t.args || t.args_def || t.argsDef || [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }];
+      if (typeof toolArgs === "string") { try { toolArgs = JSON.parse(toolArgs); } catch { toolArgs = []; } }
+
+      try {
+        const upsertResp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools?on_conflict=tool_id`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=minimal,resolution=merge-duplicates" },
+          body: JSON.stringify({
+            tool_id: toolId, name: toolName, name_ar: nameAr,
+            icon: t.icon || "🔧", description: t.description || "",
+            category, args: toolArgs, execution_type: execType, execution_config: execConfig,
+          }),
+        });
+        if (upsertResp.ok) { added++; } else { errors++; }
+      } catch { errors++; }
+    }
+
+    return `✅ تم استيراد الأدوات من GitHub\n\n📦 المصدر: ${github_url}\n✅ تمت الإضافة: ${added}\n⏭️ تم تخطي: ${skipped}\n❌ أخطاء: ${errors}\n📊 الإجمالي: ${tools.length}`;
+  } catch (e) {
+    return `❌ خطأ في الاستيراد: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
 async function executeToolCall(name: string, args: Record<string, string>): Promise<string> {
   if (name === "telegram_add_command") return executeTelegramAction("add_command", { command: args.command, response: args.response, description: args.description || "" });
   if (name === "telegram_remove_command") return executeTelegramAction("remove_command", { command: args.command });
@@ -584,6 +656,7 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
   if (name === "delete_custom_tool") return deleteCustomToolFromDB(args.tool_id);
   if (name === "list_custom_tools") return listCustomToolsFromDB();
   if (name === "update_custom_tool") return updateCustomToolInDB(args);
+  if (name === "import_tools_from_github") return importToolsFromGitHub(args);
   if (name === "recall_target") return recallTarget(args.target);
   if (name === "save_scan_result") return saveScanResult(args);
   if (name === "generate_report") return generateReport(args);

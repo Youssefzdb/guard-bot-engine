@@ -1586,80 +1586,448 @@ function formatVTResults(data: any, scanType: string, target: string): string[] 
   return lines;
 }
 
+// Common wordlist for directory brute-forcing
+const COMMON_DIRS = [
+  "admin", "login", "wp-admin", "wp-login.php", "administrator", "dashboard",
+  "api", "api/v1", "api/v2", "graphql", ".env", ".git", ".git/config",
+  "backup", "backups", "db", "database", "config", "configuration",
+  "test", "testing", "dev", "debug", "staging", "temp", "tmp",
+  "uploads", "upload", "files", "images", "assets", "static", "media",
+  "phpmyadmin", "pma", "mysql", "sql", "adminer",
+  "robots.txt", "sitemap.xml", "crossdomain.xml", ".htaccess", ".htpasswd",
+  "wp-content", "wp-includes", "wp-json", "xmlrpc.php",
+  "cgi-bin", "server-status", "server-info",
+  ".DS_Store", "web.config", "package.json", "composer.json",
+  "node_modules", "vendor", ".svn", ".hg",
+  "console", "shell", "cmd", "terminal",
+  "user", "users", "account", "accounts", "profile", "register", "signup",
+  "forgot", "reset", "password", "auth", "oauth", "sso",
+  "panel", "cpanel", "webmail", "mail",
+  "docs", "documentation", "swagger", "api-docs",
+  "health", "status", "info", "metrics", "monitor",
+  "search", "log", "logs", "error", "errors",
+  "install", "setup", "init", "update", "upgrade",
+  "download", "export", "import", "data",
+  "secret", "secrets", "private", "internal", "hidden",
+];
+
+// Common fuzzing payloads for parameter testing
+const FUZZ_PAYLOADS = [
+  // XSS
+  '<script>alert(1)</script>', '"><img src=x onerror=alert(1)>', "'-alert(1)-'",
+  // SQLi
+  "' OR 1=1--", "' UNION SELECT NULL--", "1; DROP TABLE users--", "' AND '1'='1",
+  // Path traversal
+  "../../etc/passwd", "..\\..\\windows\\system32\\config\\sam",
+  // Command injection
+  "; ls -la", "| cat /etc/passwd", "$(whoami)", "`id`",
+  // SSRF
+  "http://localhost", "http://127.0.0.1", "http://[::1]",
+  // Template injection
+  "{{7*7}}", "${7*7}", "<%= 7*7 %>",
+];
+
+// Detect tool type from repo name/URL
+function detectToolType(sourceRepo: string): string {
+  const repo = sourceRepo.toLowerCase();
+  if (repo.includes("dirb") || repo.includes("dirbuster") || repo.includes("gobuster") || repo.includes("dirsearch")) return "dirb";
+  if (repo.includes("ffuf") || repo.includes("fuzz") || repo.includes("wfuzz")) return "ffuf";
+  if (repo.includes("nikto") || repo.includes("vulnscan") || repo.includes("vulnerability")) return "nikto";
+  if (repo.includes("nmap") || repo.includes("masscan") || repo.includes("portscan")) return "nmap";
+  if (repo.includes("sqlmap") || repo.includes("sql-inject") || repo.includes("sqli")) return "sqlmap";
+  if (repo.includes("xss") || repo.includes("xsstrike") || repo.includes("dalfox")) return "xss";
+  if (repo.includes("subdomain") || repo.includes("subfinder") || repo.includes("sublist3r") || repo.includes("amass")) return "subdomain";
+  if (repo.includes("nuclei") || repo.includes("template")) return "nuclei";
+  if (repo.includes("hydra") || repo.includes("brute") || repo.includes("crack") || repo.includes("patator")) return "bruteforce";
+  if (repo.includes("whatweb") || repo.includes("wappalyzer") || repo.includes("webtech")) return "techdetect";
+  if (repo.includes("wayback") || repo.includes("archive") || repo.includes("gau")) return "wayback";
+  return "virustotal"; // fallback
+}
+
+// Execute dirb-like directory brute-forcing
+async function executeDirb(target: string): Promise<string> {
+  let baseUrl = target.trim();
+  if (!baseUrl.startsWith("http")) baseUrl = "https://" + baseUrl;
+  baseUrl = baseUrl.replace(/\/+$/, "");
+  
+  const results: string[] = [`📂 DIRB - اكتشاف المسارات\n${"─".repeat(40)}`];
+  results.push(`🎯 الهدف: ${baseUrl}`);
+  results.push(`📋 عدد المسارات: ${COMMON_DIRS.length}\n`);
+  
+  const found: { path: string; status: number; size: number }[] = [];
+  let checked = 0;
+  
+  // Check paths in parallel batches
+  const batchSize = 10;
+  for (let i = 0; i < COMMON_DIRS.length; i += batchSize) {
+    const batch = COMMON_DIRS.slice(i, i + batchSize);
+    const promises = batch.map(async (dir) => {
+      try {
+        const resp = await stealthFetch(`${baseUrl}/${dir}`, { method: "GET", redirect: "manual" });
+        const body = await resp.text();
+        checked++;
+        if (resp.status !== 404 && resp.status !== 0) {
+          found.push({ path: `/${dir}`, status: resp.status, size: body.length });
+        }
+      } catch { checked++; }
+    });
+    await Promise.all(promises);
+  }
+  
+  if (found.length > 0) {
+    results.push(`✅ مسارات مكتشفة (${found.length}):\n`);
+    found.sort((a, b) => a.status - b.status);
+    for (const f of found) {
+      const icon = f.status === 200 ? "🟢" : f.status === 301 || f.status === 302 ? "🔀" : f.status === 403 ? "🔒" : "🟡";
+      results.push(`  ${icon} [${f.status}] ${f.path} (${f.size} bytes)`);
+    }
+  } else {
+    results.push(`❌ لم يتم العثور على مسارات مكشوفة`);
+  }
+  
+  results.push(`\n📊 الإحصائيات:`);
+  results.push(`  تم فحص: ${checked} مسار`);
+  results.push(`  مكتشف: ${found.length}`);
+  results.push(`  🟢 200: ${found.filter(f => f.status === 200).length}`);
+  results.push(`  🔀 3xx: ${found.filter(f => f.status >= 300 && f.status < 400).length}`);
+  results.push(`  🔒 403: ${found.filter(f => f.status === 403).length}`);
+  results.push(`  🟡 أخرى: ${found.filter(f => f.status !== 200 && f.status !== 403 && !(f.status >= 300 && f.status < 400)).length}`);
+  
+  return results.join("\n");
+}
+
+// Execute ffuf-like fuzzing
+async function executeFfuf(target: string): Promise<string> {
+  let baseUrl = target.trim();
+  if (!baseUrl.startsWith("http")) baseUrl = "https://" + baseUrl;
+  
+  const results: string[] = [`🔥 FFUF - Fuzzing\n${"─".repeat(40)}`];
+  results.push(`🎯 الهدف: ${baseUrl}\n`);
+  
+  // Phase 1: Parameter fuzzing on the main URL
+  results.push(`📌 المرحلة 1: فحص Payloads أمنية\n`);
+  const vulns: { payload: string; type: string; evidence: string }[] = [];
+  
+  for (const payload of FUZZ_PAYLOADS) {
+    try {
+      const testUrl = `${baseUrl}?test=${encodeURIComponent(payload)}`;
+      const resp = await stealthFetch(testUrl, { redirect: "follow" });
+      const body = await resp.text();
+      
+      // Check if payload is reflected (potential XSS)
+      if (body.includes(payload) && payload.includes("<")) {
+        vulns.push({ payload, type: "XSS (انعكاس)", evidence: "Payload منعكس في الاستجابة" });
+      }
+      // Check for SQL errors
+      if (body.match(/sql|syntax|mysql|postgresql|oracle|sqlite|unterminated/i) && payload.includes("'")) {
+        vulns.push({ payload, type: "SQLi (محتمل)", evidence: "رسالة خطأ SQL مكتشفة" });
+      }
+      // Check for path traversal
+      if (body.includes("root:") && payload.includes("etc/passwd")) {
+        vulns.push({ payload, type: "Path Traversal", evidence: "محتوى /etc/passwd مكشوف" });
+      }
+      // Check for template injection
+      if (body.includes("49") && payload.includes("7*7")) {
+        vulns.push({ payload, type: "Template Injection", evidence: "تم تنفيذ العملية الحسابية" });
+      }
+    } catch {}
+  }
+  
+  if (vulns.length > 0) {
+    results.push(`  🚨 ثغرات محتملة (${vulns.length}):`);
+    vulns.forEach(v => {
+      results.push(`    ⚠️ ${v.type}`);
+      results.push(`      Payload: ${v.payload.substring(0, 50)}`);
+      results.push(`      الدليل: ${v.evidence}`);
+    });
+  } else {
+    results.push(`  ✅ لم يتم اكتشاف ثغرات انعكاسية`);
+  }
+  
+  // Phase 2: Directory discovery (quick)
+  results.push(`\n📌 المرحلة 2: اكتشاف مسارات سريع\n`);
+  const quickDirs = COMMON_DIRS.slice(0, 30);
+  const foundDirs: string[] = [];
+  const dirPromises = quickDirs.map(async (dir) => {
+    try {
+      const resp = await stealthFetch(`${baseUrl.replace(/\/+$/, "")}/${dir}`, { method: "HEAD", redirect: "manual" });
+      await resp.text();
+      if (resp.status !== 404) foundDirs.push(`  [${resp.status}] /${dir}`);
+    } catch {}
+  });
+  await Promise.all(dirPromises);
+  
+  if (foundDirs.length > 0) {
+    results.push(`  مسارات مكتشفة (${foundDirs.length}):`);
+    foundDirs.forEach(d => results.push(`  ${d}`));
+  } else {
+    results.push(`  لم يتم العثور على مسارات`);
+  }
+  
+  results.push(`\n📊 ملخص: ${FUZZ_PAYLOADS.length} payload | ${vulns.length} ثغرة محتملة | ${foundDirs.length} مسار`);
+  return results.join("\n");
+}
+
+// Execute nikto-like vulnerability scanning
+async function executeNikto(target: string): Promise<string> {
+  let baseUrl = target.trim();
+  if (!baseUrl.startsWith("http")) baseUrl = "https://" + baseUrl;
+  
+  const results: string[] = [`🔍 NIKTO - فحص الثغرات\n${"─".repeat(40)}`];
+  results.push(`🎯 الهدف: ${baseUrl}\n`);
+  
+  const issues: { severity: string; title: string; detail: string }[] = [];
+  
+  // Check 1: HTTP Headers security
+  try {
+    const resp = await stealthFetch(baseUrl, { method: "HEAD" });
+    await resp.text();
+    const secHeaders = ["strict-transport-security", "content-security-policy", "x-content-type-options", "x-frame-options", "x-xss-protection", "referrer-policy", "permissions-policy"];
+    const missing = secHeaders.filter(h => !resp.headers.get(h));
+    if (missing.length > 0) {
+      issues.push({ severity: "🟡", title: "Headers أمنية مفقودة", detail: missing.join(", ") });
+    }
+    const server = resp.headers.get("server");
+    if (server) issues.push({ severity: "🟡", title: "كشف إصدار السيرفر", detail: `Server: ${server}` });
+    const powered = resp.headers.get("x-powered-by");
+    if (powered) issues.push({ severity: "🟡", title: "كشف التقنية", detail: `X-Powered-By: ${powered}` });
+  } catch {}
+  
+  // Check 2: Sensitive files
+  const sensitiveFiles = [".env", ".git/config", ".htpasswd", "wp-config.php", "config.php", "phpinfo.php", ".DS_Store", "web.config", "server-status", "elmah.axd", "trace.axd"];
+  for (const file of sensitiveFiles) {
+    try {
+      const resp = await stealthFetch(`${baseUrl.replace(/\/+$/, "")}/${file}`, { redirect: "manual" });
+      const body = await resp.text();
+      if (resp.status === 200 && body.length > 0) {
+        issues.push({ severity: "🔴", title: `ملف حساس مكشوف: ${file}`, detail: `حجم: ${body.length} bytes` });
+      }
+    } catch {}
+  }
+  
+  // Check 3: HTTP methods
+  try {
+    const resp = await stealthFetch(baseUrl, { method: "OPTIONS" });
+    const allow = resp.headers.get("allow");
+    await resp.text();
+    if (allow) {
+      const methods = allow.split(",").map(m => m.trim());
+      const dangerous = methods.filter(m => ["PUT", "DELETE", "TRACE", "CONNECT"].includes(m));
+      if (dangerous.length > 0) {
+        issues.push({ severity: "🔴", title: "HTTP methods خطيرة مفعّلة", detail: dangerous.join(", ") });
+      }
+    }
+  } catch {}
+  
+  // Check 4: CORS misconfiguration
+  try {
+    const resp = await stealthFetch(baseUrl, { headers: { "Origin": "https://evil.com" } });
+    await resp.text();
+    const acao = resp.headers.get("access-control-allow-origin");
+    if (acao === "*" || acao === "https://evil.com") {
+      issues.push({ severity: "🔴", title: "CORS مفتوح", detail: `Allow-Origin: ${acao}` });
+    }
+  } catch {}
+  
+  // Check 5: Cookie security
+  try {
+    const resp = await stealthFetch(baseUrl);
+    await resp.text();
+    const cookies = resp.headers.get("set-cookie");
+    if (cookies) {
+      if (!cookies.toLowerCase().includes("httponly")) issues.push({ severity: "🟡", title: "Cookie بدون HttpOnly", detail: "عرضة لسرقة عبر XSS" });
+      if (!cookies.toLowerCase().includes("secure")) issues.push({ severity: "🟡", title: "Cookie بدون Secure flag", detail: "ترسل عبر HTTP غير مشفر" });
+      if (!cookies.toLowerCase().includes("samesite")) issues.push({ severity: "🟡", title: "Cookie بدون SameSite", detail: "عرضة لهجمات CSRF" });
+    }
+  } catch {}
+  
+  // Format results
+  if (issues.length > 0) {
+    const critical = issues.filter(i => i.severity === "🔴");
+    const warning = issues.filter(i => i.severity === "🟡");
+    
+    if (critical.length > 0) {
+      results.push(`🔴 مشاكل حرجة (${critical.length}):`);
+      critical.forEach(i => results.push(`  ${i.severity} ${i.title}\n    → ${i.detail}`));
+    }
+    if (warning.length > 0) {
+      results.push(`\n🟡 تحذيرات (${warning.length}):`);
+      warning.forEach(i => results.push(`  ${i.severity} ${i.title}\n    → ${i.detail}`));
+    }
+  } else {
+    results.push(`✅ لم يتم اكتشاف مشاكل أمنية واضحة`);
+  }
+  
+  const score = Math.max(0, 100 - (issues.filter(i=>i.severity==="🔴").length * 15) - (issues.filter(i=>i.severity==="🟡").length * 5));
+  results.push(`\n📊 نتيجة الأمان: ${score}/100`);
+  results.push(`  فحوصات: ${sensitiveFiles.length + 5} | مشاكل: ${issues.length}`);
+  
+  return results.join("\n");
+}
+
+// Execute nmap-like port scanning
+async function executeNmap(target: string): Promise<string> {
+  let hostname = target.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:.*$/, "");
+  const commonPorts = [21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 587, 993, 995, 1433, 1521, 3306, 3389, 5432, 5900, 6379, 8080, 8443, 8888, 9090, 27017];
+  
+  const results: string[] = [`🔌 NMAP - فحص المنافذ\n${"─".repeat(40)}`];
+  results.push(`🎯 الهدف: ${hostname}`);
+  results.push(`📋 المنافذ: ${commonPorts.length} منفذ شائع\n`);
+  
+  const openPorts: { port: number; service: string; time: number }[] = [];
+  const serviceMap: Record<number, string> = { 21:"FTP", 22:"SSH", 23:"Telnet", 25:"SMTP", 53:"DNS", 80:"HTTP", 110:"POP3", 143:"IMAP", 443:"HTTPS", 445:"SMB", 587:"SMTP-TLS", 993:"IMAPS", 995:"POP3S", 1433:"MSSQL", 1521:"Oracle", 3306:"MySQL", 3389:"RDP", 5432:"PostgreSQL", 5900:"VNC", 6379:"Redis", 8080:"HTTP-Proxy", 8443:"HTTPS-Alt", 8888:"HTTP-Alt", 9090:"HTTP-Alt", 27017:"MongoDB" };
+  
+  const batchSize = 5;
+  for (let i = 0; i < commonPorts.length; i += batchSize) {
+    const batch = commonPorts.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (port) => {
+      const start = performance.now();
+      try {
+        const conn = await Deno.connect({ hostname, port, transport: "tcp" });
+        const elapsed = performance.now() - start;
+        conn.close();
+        openPorts.push({ port, service: serviceMap[port] || "unknown", time: elapsed });
+      } catch {}
+    }));
+  }
+  
+  if (openPorts.length > 0) {
+    results.push(`PORT      STATE   SERVICE       TIME`);
+    results.push(`${"─".repeat(45)}`);
+    openPorts.sort((a, b) => a.port - b.port).forEach(p => {
+      results.push(`${String(p.port).padEnd(10)}OPEN    ${p.service.padEnd(14)}${p.time.toFixed(1)}ms`);
+    });
+  } else {
+    results.push(`❌ جميع المنافذ مغلقة أو مفلترة`);
+  }
+  
+  results.push(`\n📊 النتائج: ${openPorts.length} مفتوح من ${commonPorts.length}`);
+  if (openPorts.some(p => [23, 21, 445, 3389, 5900].includes(p.port))) {
+    results.push(`\n⚠️ تحذير: منافذ عالية الخطورة مكشوفة!`);
+  }
+  
+  return results.join("\n");
+}
+
+// Execute subdomain enumeration
+async function executeSubdomainEnum(target: string): Promise<string> {
+  let domain = target.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const results: string[] = [`🔍 Subdomain Enumeration\n${"─".repeat(40)}`];
+  results.push(`🎯 النطاق: ${domain}\n`);
+  
+  const prefixes = ["www", "mail", "ftp", "smtp", "pop", "imap", "webmail", "admin", "panel", "cpanel", "api", "dev", "staging", "test", "beta", "app", "m", "mobile", "cdn", "static", "assets", "img", "images", "ns1", "ns2", "dns", "mx", "vpn", "remote", "gateway", "portal", "sso", "auth", "login", "shop", "store", "blog", "news", "support", "help", "docs", "wiki", "git", "gitlab", "jenkins", "ci", "jira", "confluence", "monitoring", "grafana", "kibana", "elastic", "db", "database", "mysql", "redis", "mongo"];
+  
+  const found: string[] = [];
+  const batchSize = 10;
+  for (let i = 0; i < prefixes.length; i += batchSize) {
+    const batch = prefixes.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (prefix) => {
+      try {
+        const sub = `${prefix}.${domain}`;
+        const ips = await Deno.resolveDns(sub, "A");
+        if (ips.length > 0) found.push(`  ✅ ${sub} → ${ips[0]}`);
+      } catch {}
+    }));
+  }
+  
+  // Also try VirusTotal for subdomains
+  try {
+    const vtKey = Deno.env.get("VIRUSTOTAL_API_KEY");
+    if (vtKey) {
+      const resp = await fetch(`https://www.virustotal.com/api/v3/domains/${domain}/subdomains?limit=20`, {
+        headers: { "x-apikey": vtKey },
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data?.data) {
+          for (const s of data.data) {
+            const sub = s.id;
+            if (!found.some(f => f.includes(sub))) found.push(`  ✅ ${sub} (VT)`);
+          }
+        }
+      } else { await resp.text(); }
+    }
+  } catch {}
+  
+  if (found.length > 0) {
+    results.push(`🌐 نطاقات فرعية مكتشفة (${found.length}):`);
+    found.forEach(f => results.push(f));
+  } else {
+    results.push(`❌ لم يتم العثور على نطاقات فرعية`);
+  }
+  
+  results.push(`\n📊 تم فحص: ${prefixes.length} بادئة`);
+  return results.join("\n");
+}
+
 // Custom tool execution handler
 async function executeCustomTool(args: Record<string, string>, config: { executionType: string; executionConfig: Record<string, string> }): Promise<string> {
   const { executionType, executionConfig } = config;
   const results: string[] = [`🔧 تنفيذ أداة مخصصة\n${"─".repeat(40)}`];
 
   try {
-    // Check if this is a GitHub-imported tool → use VirusTotal API
+    // Check if this is a GitHub-imported tool → route to real implementation
     const isGithubImported = !!executionConfig.source_repo;
-    const vtApiKey = Deno.env.get("VIRUSTOTAL_API_KEY");
 
-    if (isGithubImported && vtApiKey && executionType === "http_fetch") {
+    if (isGithubImported && executionType === "http_fetch") {
       const target = args.target || args.url || args.domain || args.ip || Object.values(args)[0] || "";
       if (!target) return "❌ لم يتم تحديد الهدف";
 
-      const scanType = detectVTScanType(target);
-      results.push(`🛡️ VirusTotal - تحليل ${scanType === "url" ? "رابط" : scanType === "ip" ? "عنوان IP" : "نطاق"}`);
-      results.push(`🎯 الهدف: ${target}`);
-      results.push(`📦 المصدر: ${executionConfig.source_repo || "GitHub"}`);
+      const toolType = detectToolType(executionConfig.source_repo);
 
-      try {
-        if (scanType === "url") {
-          // Submit URL for scanning first
-          const scanResp = await vtApiCall("urls", "POST", `url=${encodeURIComponent(target)}`);
-          const analysisId = scanResp?.data?.id;
-
-          // Wait a bit then get results
-          await new Promise(r => setTimeout(r, 3000));
-
-          if (analysisId) {
-            try {
-              const analysis = await vtApiCall(`analyses/${analysisId}`);
-              const stats = analysis?.data?.attributes?.stats || {};
-              results.push(`\n📊 نتائج الفحص:`);
-              results.push(`  🔴 خبيث: ${stats.malicious || 0}`);
-              results.push(`  🟡 مشبوه: ${stats.suspicious || 0}`);
-              results.push(`  🟢 آمن: ${stats.harmless || 0}`);
-              results.push(`  ⚪ غير مكتشف: ${stats.undetected || 0}`);
-              const total = Object.values(stats).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
-              const mal = stats.malicious || 0;
-              results.push(`\n🛡️ الحكم: ${mal > 0 ? "⚠️ تم اكتشاف تهديدات!" : "✅ آمن"}`);
-            } catch {
-              results.push(`⏳ التحليل قيد التنفيذ... أعد المحاولة بعد دقيقة`);
-            }
-          }
-
-          // Also get URL report if available
-          const urlId = btoa(target).replace(/=/g, "");
+      switch (toolType) {
+        case "dirb": return executeDirb(target);
+        case "ffuf": return executeFfuf(target);
+        case "nikto": return executeNikto(target);
+        case "nmap": return executeNmap(target);
+        case "subdomain": return executeSubdomainEnum(target);
+        case "sqlmap": return executeFfuf(target); // SQLi testing via fuzzing
+        case "xss": return executeFfuf(target); // XSS testing via fuzzing
+        case "techdetect": return tools.tech_detect({ url: target.startsWith("http") ? target : `https://${target}` });
+        case "wayback": {
+          // Wayback Machine API
           try {
-            const report = await vtApiCall(`urls/${urlId}`);
-            results.push(...formatVTResults(report, "url", target));
-          } catch {}
-
-        } else if (scanType === "domain") {
-          const data = await vtApiCall(`domains/${target}`);
-          results.push(...formatVTResults(data, "domain", target));
-
-          // Get subdomains
-          try {
-            const subs = await vtApiCall(`domains/${target}/subdomains?limit=10`);
-            if (subs?.data?.length > 0) {
-              results.push(`\n🔍 النطاقات الفرعية:`);
-              subs.data.forEach((s: any) => results.push(`  → ${s.id}`));
+            const resp = await fetch(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(target)}/*&output=json&limit=20`);
+            const data = await resp.json();
+            if (Array.isArray(data) && data.length > 1) {
+              const lines = [`📜 Wayback Machine - ${target}\n${"─".repeat(40)}\n`];
+              lines.push(`📊 ${data.length - 1} نتيجة:\n`);
+              data.slice(1, 21).forEach((row: any) => {
+                lines.push(`  📅 ${row[1]} → ${row[2]} [${row[4]}]`);
+              });
+              return lines.join("\n");
             }
-          } catch {}
-
-        } else if (scanType === "ip") {
-          const data = await vtApiCall(`ip_addresses/${target}`);
-          results.push(...formatVTResults(data, "ip", target));
+            return `📜 لا توجد نتائج في Wayback Machine لـ ${target}`;
+          } catch { return `❌ فشل الاتصال بـ Wayback Machine`; }
         }
-      } catch (e) {
-        results.push(`\n❌ خطأ VirusTotal: ${e instanceof Error ? e.message : "فشل"}`);
+        case "virustotal":
+        default: {
+          // VirusTotal fallback for unrecognized tools
+          const vtApiKey = Deno.env.get("VIRUSTOTAL_API_KEY");
+          if (vtApiKey) {
+            const scanType = detectVTScanType(target);
+            results.push(`🛡️ VirusTotal - تحليل ${scanType === "url" ? "رابط" : scanType === "ip" ? "عنوان IP" : "نطاق"}`);
+            results.push(`🎯 الهدف: ${target}`);
+            try {
+              if (scanType === "domain") {
+                const data = await vtApiCall(`domains/${target}`);
+                results.push(...formatVTResults(data, "domain", target));
+              } else if (scanType === "ip") {
+                const data = await vtApiCall(`ip_addresses/${target}`);
+                results.push(...formatVTResults(data, "ip", target));
+              } else {
+                const scanResp = await vtApiCall("urls", "POST", `url=${encodeURIComponent(target)}`);
+                await new Promise(r => setTimeout(r, 3000));
+                const urlId = btoa(target).replace(/=/g, "");
+                try { const report = await vtApiCall(`urls/${urlId}`); results.push(...formatVTResults(report, "url", target)); } catch {}
+              }
+            } catch (e) { results.push(`❌ خطأ: ${e instanceof Error ? e.message : "فشل"}`); }
+            return results.join("\n");
+          }
+          // No VT key - basic fetch fallback
+          return `❌ لا يمكن تنفيذ هذه الأداة بدون مفتاح VirusTotal API`;
+        }
       }
-
-      return results.join("\n");
     }
 
     if (executionType === "http_fetch") {

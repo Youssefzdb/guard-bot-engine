@@ -729,15 +729,33 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   });
 }
 
-// Global round-robin counter for even key distribution
+// Global round-robin counter for even key distribution across rounds
 let globalKeyCounter = 0;
+// Track temporarily failed keys (rate limited) - reset after cooldown
+const failedKeys = new Map<number, number>(); // keyIndex -> failTime
+const KEY_COOLDOWN_MS = 60_000; // 1 minute cooldown for failed keys
 
-// Call AI with fallback keys, smart queue, and retry with backoff
+function getNextAvailableKey(totalKeys: number, startFrom: number): number {
+  const now = Date.now();
+  // Clean expired cooldowns
+  for (const [idx, time] of failedKeys) {
+    if (now - time > KEY_COOLDOWN_MS) failedKeys.delete(idx);
+  }
+  // Find next non-failed key starting from startFrom
+  for (let i = 0; i < totalKeys; i++) {
+    const idx = (startFrom + i) % totalKeys;
+    if (!failedKeys.has(idx)) return idx;
+  }
+  // All keys failed - clear and start fresh
+  failedKeys.clear();
+  return startFrom % totalKeys;
+}
+
+// Call AI with fast key switching - optimized for 200+ keys
 async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[]; allProviderKeys?: { providerId: string; keys: string[] }[] }, startFromKey = -1): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
-  // Smart queue: wait for turn before making request
   await requestQueue.waitTurn();
 
-  // Build a flat list of all attempts: [{providerId, modelId, apiKey}, ...]
+  // Build flat list of all keys
   const attempts: { providerId: string; modelId: string; apiKey: string }[] = [];
   
   if (customProvider?.allProviderKeys && customProvider.allProviderKeys.length > 0) {
@@ -763,62 +781,58 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
     return { response, usedKeyIndex: 0 };
   }
 
-  // Round-robin: use global counter for even distribution, or explicit startFromKey
-  const startIdx = startFromKey >= 0 ? startFromKey : globalKeyCounter;
-  globalKeyCounter = (startIdx + 1) % attempts.length;
-  
-  const reordered = [...attempts.slice(startIdx % attempts.length), ...attempts.slice(0, startIdx % attempts.length)];
+  // Determine start key: explicit or round-robin with skip of failed keys
+  const rawStart = startFromKey >= 0 ? startFromKey : globalKeyCounter;
+  const startIdx = getNextAvailableKey(attempts.length, rawStart);
   
   const errors: string[] = [];
+  const MAX_RETRIES = Math.min(attempts.length, 10); // Try up to 10 keys max per call
 
-  for (let i = 0; i < reordered.length; i++) {
-    const attempt = reordered[i];
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    const idx = getNextAvailableKey(attempts.length, (startIdx + i) % attempts.length);
+    const attempt = attempts[idx];
     const config = PROVIDER_CONFIGS[attempt.providerId];
     if (!config) continue;
 
-    // Add delay between attempts on rate limit
-    if (i > 0) {
-      const retryDelay = Math.min(3000, 500 * i);
-      await new Promise(r => setTimeout(r, retryDelay));
-    }
+    // NO delay on first attempt, minimal delay on retries (fast switching)
+    if (i > 0) await new Promise(r => setTimeout(r, 100));
 
     const providerWithKey = { providerId: attempt.providerId, modelId: attempt.modelId, apiKey: attempt.apiKey, apiKeys: [attempt.apiKey] };
     const response = await callAI(messages, tools, stream, providerWithKey);
     
     if (response.ok) {
       requestQueue.onSuccess();
-      const originalIndex = attempts.indexOf(attempt);
-      return { response, usedKeyIndex: originalIndex };
+      // Update global counter to next key after the successful one
+      globalKeyCounter = (idx + 1) % attempts.length;
+      return { response, usedKeyIndex: idx };
     }
     
     const status = response.status;
     let errBody = "";
     try { errBody = await response.text(); } catch {}
+    
+    // Mark this key as failed
+    failedKeys.set(idx, Date.now());
+    
     const maskedKey = attempt.apiKey.slice(0, 6) + "***" + attempt.apiKey.slice(-4);
-    errors.push(`${attempt.providerId}/${attempt.modelId} (${maskedKey}): خطأ ${status} - ${errBody.slice(0, 150)}`);
+    errors.push(`مفتاح#${idx + 1} (${maskedKey}): خطأ ${status}`);
+    console.log(`Key #${idx + 1} failed with ${status}, switching instantly...`);
 
-    if (status === 429) {
-      requestQueue.onRateLimit();
-      console.log(`${attempt.providerId} key hit rate limit, trying next...`);
-      continue;
+    if (status === 429 || status === 401 || status === 403 || status === 402 || status === 400) {
+      continue; // Fast switch to next key
     }
-    if (status === 401 || status === 403 || status === 402 || status === 400) {
-      console.log(`${attempt.providerId} key failed with ${status}, trying next...`);
-      continue;
-    }
-    return { response, usedKeyIndex: attempts.indexOf(attempt), errorDetails: errors.join("\n") };
+    // Other errors: stop trying
+    return { response, usedKeyIndex: idx, errorDetails: errors.join("\n") };
   }
 
-  // All keys/providers exhausted - final retry with backoff
-  const backoffMs = requestQueue.getDelay();
-  console.log(`All providers/keys failed, waiting ${backoffMs}ms before final retry...`);
-  await new Promise(r => setTimeout(r, backoffMs));
-
-  const firstAttempt = reordered[0];
-  const lastProvider = { providerId: firstAttempt.providerId, modelId: firstAttempt.modelId, apiKey: firstAttempt.apiKey, apiKeys: [firstAttempt.apiKey] };
+  // All retried keys failed
+  globalKeyCounter = (startIdx + MAX_RETRIES) % attempts.length;
+  const lastIdx = getNextAvailableKey(attempts.length, globalKeyCounter);
+  const lastAttempt = attempts[lastIdx];
+  const lastProvider = { providerId: lastAttempt.providerId, modelId: lastAttempt.modelId, apiKey: lastAttempt.apiKey, apiKeys: [lastAttempt.apiKey] };
   const response = await callAI(messages, tools, stream, lastProvider);
   if (response.ok) requestQueue.onSuccess();
-  return { response, usedKeyIndex: 0, errorDetails: errors.join("\n") };
+  return { response, usedKeyIndex: lastIdx, errorDetails: errors.join("\n") };
 }
 
 // Parse Anthropic response to OpenAI-compatible format
@@ -937,20 +951,21 @@ serve(async (req) => {
             
             round++;
 
-            // Send progress info with key assignment
+            // Send progress info
             send(`\n<!--PROGRESS:${round}/${MAX_ROUNDS}:${Math.round(timeLeft()/1000)}-->\n`);
-            send(`\n🔑 **الجولة ${round}** — مفتاح #${round}\n`);
             
             // Record token usage for this request
             recordTokenUsage(estimateTokens(JSON.stringify(conversationMessages)) + 1024);
 
-            // Assign this round to a specific key (round-based distribution)
-            const keyIndexForRound = (round - 1); // round 1→key 0, round 2→key 1, etc.
+            // Each round starts from a different key (round-robin), failed keys auto-skipped
+            const keyIndexForRound = (round - 1);
             const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
               callAIWithFallback(conversationMessages, aiTools, false, effectiveProvider, keyIndexForRound),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );
+            
+            send(`\n🔑 **الجولة ${round}** — مفتاح #${usedKeyIndex + 1}\n`);
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;

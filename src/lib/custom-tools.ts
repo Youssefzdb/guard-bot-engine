@@ -102,35 +102,74 @@ export async function importTools(json: string): Promise<number> {
 }
 
 export async function importToolsFromGitHub(url: string): Promise<number> {
-  let rawUrl = url.trim();
+  let rawUrl = url.trim().replace(/\/$/, "");
 
-  // Detect repo-only URLs (no file path) and show helpful error
-  const repoOnlyMatch = rawUrl.match(/^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+\/?$/);
-  if (repoOnlyMatch) {
-    // Try common file names in the repo
-    const repoBase = rawUrl.replace(/\/$/, "");
+  // Check if it's a repo URL (not a file)
+  const repoMatch = rawUrl.match(/^https?:\/\/(www\.)?github\.com\/([^/]+)\/([^/]+?)(\.git)?$/);
+
+  if (repoMatch) {
+    const owner = repoMatch[2];
+    const repo = repoMatch[3];
+
+    // First try to find a tools.json file in the repo
     const candidates = [
-      `${repoBase}/blob/main/tools.json`,
-      `${repoBase}/blob/master/tools.json`,
-      `${repoBase}/blob/main/custom-tools.json`,
-      `${repoBase}/blob/master/custom-tools.json`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/main/tools.json`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/master/tools.json`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/main/custom-tools.json`,
+      `https://raw.githubusercontent.com/${owner}/${repo}/master/custom-tools.json`,
     ];
     for (const candidate of candidates) {
-      const candidateRaw = candidate
-        .replace("github.com", "raw.githubusercontent.com")
-        .replace("/blob/", "/");
       try {
-        const resp = await fetch(candidateRaw);
+        const resp = await fetch(candidate);
         if (resp.ok) {
           const text = await resp.text();
           return importTools(text);
         }
       } catch {}
     }
-    throw new Error("هذا رابط مستودع وليس ملف. أضف مسار الملف مثل:\ngithub.com/user/repo/blob/main/tools.json");
+
+    // No tools.json found - auto-generate a tool definition from repo info
+    let description = `أداة ${repo} من GitHub (${owner}/${repo})`;
+    let topics: string[] = [];
+    try {
+      const apiResp = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { "Accept": "application/vnd.github.v3+json" },
+      });
+      if (apiResp.ok) {
+        const repoData = await apiResp.json();
+        if (repoData.description) description = repoData.description;
+        if (repoData.topics) topics = repoData.topics;
+      }
+    } catch {}
+
+    // Determine category from topics/description
+    let category: ToolCategory = "scanning";
+    const lowerDesc = (description + " " + topics.join(" ")).toLowerCase();
+    if (lowerDesc.match(/exploit|attack|offensive|brute|crack|inject|payload|fuzzer|fuzz/)) {
+      category = "offensive";
+    } else if (lowerDesc.match(/defend|protect|monitor|detect|firewall|ids|waf|harden|blue/)) {
+      category = "defensive";
+    }
+
+    const toolId = repo.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    await saveCustomTool({
+      tool_id: toolId,
+      name: repo,
+      name_ar: `أداة ${repo}`,
+      icon: category === "offensive" ? "⚔️" : category === "defensive" ? "🛡️" : "🔍",
+      description,
+      category,
+      args: [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }],
+      execution_type: "http_fetch",
+      execution_config: {
+        method: "GET",
+        source_repo: `https://github.com/${owner}/${repo}`,
+      },
+    });
+    return 1;
   }
 
-  // Convert GitHub blob URL to raw
+  // It's a file URL - convert to raw
   if (rawUrl.includes("github.com") && rawUrl.includes("/blob/")) {
     rawUrl = rawUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
   } else if (rawUrl.includes("github.com") && !rawUrl.includes("raw.githubusercontent.com")) {
@@ -139,14 +178,14 @@ export async function importToolsFromGitHub(url: string): Promise<number> {
 
   const resp = await fetch(rawUrl);
   if (!resp.ok) {
-    const body = await resp.text();
+    await resp.text();
     throw new Error(`فشل جلب الملف (${resp.status}): تأكد أن الرابط يشير لملف JSON صالح`);
   }
   const text = await resp.text();
-  
+
   try {
     return importTools(text);
-  } catch (e) {
+  } catch {
     throw new Error("الملف ليس بصيغة JSON صالحة للأدوات");
   }
 }

@@ -92,6 +92,25 @@ export const AI_PROVIDERS: AIProvider[] = [
   },
 ];
 
+// Security API providers (VirusTotal, Shodan, etc.)
+export interface SecurityAPIProvider {
+  id: string;
+  name: string;
+  nameAr: string;
+  apiKeyUrl: string;
+  description: string;
+}
+
+export const SECURITY_API_PROVIDERS: SecurityAPIProvider[] = [
+  {
+    id: "virustotal",
+    name: "VirusTotal",
+    nameAr: "فايروس توتال",
+    apiKeyUrl: "https://www.virustotal.com/gui/my-apikey",
+    description: "فحص URLs والنطاقات و IPs من البرمجيات الخبيثة",
+  },
+];
+
 export interface APIKeyEntry {
   key: string;
   label: string;

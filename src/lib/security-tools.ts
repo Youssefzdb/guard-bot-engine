@@ -368,6 +368,27 @@ export const securityTools: SecurityTool[] = [
     description: "التقاط صورة لموقع ويب",
     args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
   },
+  // ========== VIRUSTOTAL ==========
+  {
+    id: "vt_scan_url", name: "VT URL Scan", nameAr: "فحص رابط (VirusTotal)", icon: "🛡️", category: "scanning",
+    description: "فحص رابط عبر 70+ محرك مكافحة فيروسات",
+    args: [{ key: "url", label: "الرابط", placeholder: "https://example.com", required: true }],
+  },
+  {
+    id: "vt_scan_domain", name: "VT Domain Analysis", nameAr: "تحليل نطاق (VirusTotal)", icon: "🛡️", category: "scanning",
+    description: "تحليل نطاق شامل: سمعة، DNS، SSL، نطاقات فرعية",
+    args: [{ key: "domain", label: "النطاق", placeholder: "example.com", required: true }],
+  },
+  {
+    id: "vt_scan_ip", name: "VT IP Analysis", nameAr: "تحليل IP (VirusTotal)", icon: "🛡️", category: "scanning",
+    description: "تحليل عنوان IP: ASN، دولة، سمعة، تهديدات",
+    args: [{ key: "ip", label: "عنوان IP", placeholder: "8.8.8.8", required: true }],
+  },
+  {
+    id: "vt_scan_file_hash", name: "VT File Hash", nameAr: "فحص ملف (VirusTotal)", icon: "🛡️", category: "scanning",
+    description: "فحص ملف عبر hash (MD5/SHA1/SHA256)",
+    args: [{ key: "hash", label: "Hash", placeholder: "SHA256 أو MD5 أو SHA1", required: true }],
+  },
 ];
 
 const EXEC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cyber-execute`;

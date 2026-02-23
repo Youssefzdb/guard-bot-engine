@@ -1483,21 +1483,191 @@ tools.rate_limit_test = async (args) => {
   return results.join("\n");
 };
 
+// VirusTotal API helper
+async function vtApiCall(endpoint: string, method = "GET", body?: string): Promise<any> {
+  const apiKey = Deno.env.get("VIRUSTOTAL_API_KEY");
+  if (!apiKey) throw new Error("مفتاح VirusTotal API غير مُعد");
+  const opts: RequestInit = {
+    method,
+    headers: { "x-apikey": apiKey, "Content-Type": "application/x-www-form-urlencoded" },
+  };
+  if (body) opts.body = body;
+  const resp = await fetch(`https://www.virustotal.com/api/v3/${endpoint}`, opts);
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`VT API ${resp.status}: ${errText.substring(0, 200)}`);
+  }
+  return resp.json();
+}
+
+// Determine the best VirusTotal scan type based on input
+function detectVTScanType(target: string): "url" | "domain" | "ip" {
+  if (target.startsWith("http://") || target.startsWith("https://")) return "url";
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(target)) return "ip";
+  return "domain";
+}
+
+// Format VirusTotal results
+function formatVTResults(data: any, scanType: string, target: string): string[] {
+  const lines: string[] = [];
+  const attrs = data?.data?.attributes || {};
+
+  if (scanType === "url" || scanType === "domain") {
+    const stats = attrs.last_analysis_stats || {};
+    const total = Object.values(stats).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+    const malicious = stats.malicious || 0;
+    const suspicious = stats.suspicious || 0;
+    const harmless = stats.harmless || 0;
+    const undetected = stats.undetected || 0;
+
+    lines.push(`\n📊 نتائج التحليل (${total} محرك):`);
+    lines.push(`  🔴 خبيث: ${malicious}`);
+    lines.push(`  🟡 مشبوه: ${suspicious}`);
+    lines.push(`  🟢 آمن: ${harmless}`);
+    lines.push(`  ⚪ غير مكتشف: ${undetected}`);
+
+    const score = total > 0 ? Math.round(((harmless + undetected) / total) * 100) : 0;
+    lines.push(`\n🛡️ نتيجة الأمان: ${score}% ${malicious > 0 ? "⚠️ تحذير!" : "✅"}`);
+
+    // Show malicious detections
+    const results = attrs.last_analysis_results || {};
+    const maliciousEngines = Object.entries(results)
+      .filter(([, v]: [string, any]) => v.category === "malicious" || v.category === "suspicious")
+      .slice(0, 10);
+    if (maliciousEngines.length > 0) {
+      lines.push(`\n🚨 محركات اكتشفت تهديدات:`);
+      maliciousEngines.forEach(([engine, v]: [string, any]) => {
+        lines.push(`  ⚠️ ${engine}: ${v.result || v.category}`);
+      });
+    }
+
+    // Categories & reputation
+    if (attrs.categories) {
+      lines.push(`\n📂 التصنيف:`);
+      Object.entries(attrs.categories).slice(0, 5).forEach(([src, cat]) => {
+        lines.push(`  → ${src}: ${cat}`);
+      });
+    }
+    if (attrs.reputation !== undefined) lines.push(`\n⭐ السمعة: ${attrs.reputation}`);
+    if (attrs.last_https_certificate) {
+      const cert = attrs.last_https_certificate;
+      lines.push(`\n🔒 شهادة SSL:`);
+      if (cert.issuer) lines.push(`  المُصدر: ${cert.issuer.O || cert.issuer.CN || "غير معروف"}`);
+      if (cert.validity) {
+        lines.push(`  صالحة من: ${cert.validity.not_before || "?"}`);
+        lines.push(`  صالحة حتى: ${cert.validity.not_after || "?"}`);
+      }
+    }
+  }
+
+  if (scanType === "ip") {
+    lines.push(`\n🌐 معلومات IP:`);
+    if (attrs.as_owner) lines.push(`  🏢 المالك: ${attrs.as_owner}`);
+    if (attrs.asn) lines.push(`  📡 ASN: ${attrs.asn}`);
+    if (attrs.country) lines.push(`  🌍 الدولة: ${attrs.country}`);
+    if (attrs.network) lines.push(`  🔗 الشبكة: ${attrs.network}`);
+
+    const stats = attrs.last_analysis_stats || {};
+    const malicious = stats.malicious || 0;
+    const suspicious = stats.suspicious || 0;
+    const harmless = stats.harmless || 0;
+    lines.push(`\n📊 التحليل:`);
+    lines.push(`  🔴 خبيث: ${malicious} | 🟡 مشبوه: ${suspicious} | 🟢 آمن: ${harmless}`);
+  }
+
+  // Subdomains for domains
+  if (scanType === "domain" && attrs.last_dns_records) {
+    lines.push(`\n📋 سجلات DNS:`);
+    (attrs.last_dns_records as any[]).slice(0, 10).forEach((r: any) => {
+      lines.push(`  ${r.type}: ${r.value || r.data || ""}`);
+    });
+  }
+
+  return lines;
+}
+
 // Custom tool execution handler
 async function executeCustomTool(args: Record<string, string>, config: { executionType: string; executionConfig: Record<string, string> }): Promise<string> {
   const { executionType, executionConfig } = config;
   const results: string[] = [`🔧 تنفيذ أداة مخصصة\n${"─".repeat(40)}`];
 
   try {
+    // Check if this is a GitHub-imported tool → use VirusTotal API
+    const isGithubImported = !!executionConfig.source_repo;
+    const vtApiKey = Deno.env.get("VIRUSTOTAL_API_KEY");
+
+    if (isGithubImported && vtApiKey && executionType === "http_fetch") {
+      const target = args.target || args.url || args.domain || args.ip || Object.values(args)[0] || "";
+      if (!target) return "❌ لم يتم تحديد الهدف";
+
+      const scanType = detectVTScanType(target);
+      results.push(`🛡️ VirusTotal - تحليل ${scanType === "url" ? "رابط" : scanType === "ip" ? "عنوان IP" : "نطاق"}`);
+      results.push(`🎯 الهدف: ${target}`);
+      results.push(`📦 المصدر: ${executionConfig.source_repo || "GitHub"}`);
+
+      try {
+        if (scanType === "url") {
+          // Submit URL for scanning first
+          const scanResp = await vtApiCall("urls", "POST", `url=${encodeURIComponent(target)}`);
+          const analysisId = scanResp?.data?.id;
+
+          // Wait a bit then get results
+          await new Promise(r => setTimeout(r, 3000));
+
+          if (analysisId) {
+            try {
+              const analysis = await vtApiCall(`analyses/${analysisId}`);
+              const stats = analysis?.data?.attributes?.stats || {};
+              results.push(`\n📊 نتائج الفحص:`);
+              results.push(`  🔴 خبيث: ${stats.malicious || 0}`);
+              results.push(`  🟡 مشبوه: ${stats.suspicious || 0}`);
+              results.push(`  🟢 آمن: ${stats.harmless || 0}`);
+              results.push(`  ⚪ غير مكتشف: ${stats.undetected || 0}`);
+              const total = Object.values(stats).reduce((a: number, b: any) => a + (Number(b) || 0), 0);
+              const mal = stats.malicious || 0;
+              results.push(`\n🛡️ الحكم: ${mal > 0 ? "⚠️ تم اكتشاف تهديدات!" : "✅ آمن"}`);
+            } catch {
+              results.push(`⏳ التحليل قيد التنفيذ... أعد المحاولة بعد دقيقة`);
+            }
+          }
+
+          // Also get URL report if available
+          const urlId = btoa(target).replace(/=/g, "");
+          try {
+            const report = await vtApiCall(`urls/${urlId}`);
+            results.push(...formatVTResults(report, "url", target));
+          } catch {}
+
+        } else if (scanType === "domain") {
+          const data = await vtApiCall(`domains/${target}`);
+          results.push(...formatVTResults(data, "domain", target));
+
+          // Get subdomains
+          try {
+            const subs = await vtApiCall(`domains/${target}/subdomains?limit=10`);
+            if (subs?.data?.length > 0) {
+              results.push(`\n🔍 النطاقات الفرعية:`);
+              subs.data.forEach((s: any) => results.push(`  → ${s.id}`));
+            }
+          } catch {}
+
+        } else if (scanType === "ip") {
+          const data = await vtApiCall(`ip_addresses/${target}`);
+          results.push(...formatVTResults(data, "ip", target));
+        }
+      } catch (e) {
+        results.push(`\n❌ خطأ VirusTotal: ${e instanceof Error ? e.message : "فشل"}`);
+      }
+
+      return results.join("\n");
+    }
+
     if (executionType === "http_fetch") {
       let url = executionConfig.urlTemplate || executionConfig.url_template || executionConfig.url || executionConfig.endpoint || "";
-      // If still no URL, try to build from args (target/url)
       if (!url && (args.url || args.target)) {
         url = args.url || args.target || "";
-        // Ensure it has a protocol
         if (url && !url.startsWith("http")) url = "https://" + url;
       }
-      // Replace placeholders with args
       for (const [key, value] of Object.entries(args)) {
         url = url.replace(`{${key}}`, encodeURIComponent(value));
         url = url.replace(`{{${key}}}`, encodeURIComponent(value));

@@ -271,12 +271,20 @@ const aiTools = [
   mkTool("telegram_send_photo", "إرسال صورة عبر بوت تيليجرام", 
     { chat_id: { type: "string" }, photo_url: { type: "string" }, caption: { type: "string" } }, ["chat_id", "photo_url"]),
   // CUSTOM TOOLS
-  mkTool("add_custom_tool", "إضافة أداة أمنية مخصصة جديدة — ⚠️ config و args_def يجب أن يكونا JSON STRING (نص) وليس كائن JavaScript", 
+  mkTool("add_custom_tool", "إضافة أو تعديل أداة أمنية مخصصة — ⚠️ config و args_def يجب أن يكونا JSON STRING (نص) وليس كائن JavaScript", 
     { tool_id: { type: "string", description: "معرف فريد للأداة" }, name: { type: "string", description: "اسم إنجليزي" }, name_ar: { type: "string", description: "اسم عربي" }, icon: { type: "string", description: "إيموجي" },
       description: { type: "string", description: "وصف الأداة" }, category: { type: "string", description: "scanning أو offensive أو defensive" }, execution_type: { type: "string", description: "http_fetch أو dns_query أو tcp_connect أو custom_script" },
       config: { type: "string", description: "يجب أن يكون JSON STRING مثل: '{\"script\":\"return await fetch(...)\"}' — لا ترسل كائن بل نص" }, 
       args_def: { type: "string", description: "يجب أن يكون JSON STRING مثل: '[{\"key\":\"target\",\"label\":\"الهدف\",\"placeholder\":\"example.com\",\"required\":true}]'" } },
     ["tool_id", "name", "name_ar", "icon", "description", "category", "execution_type", "config", "args_def"]),
+  mkTool("delete_custom_tool", "حذف أداة مخصصة بمعرفها", 
+    { tool_id: { type: "string", description: "معرف الأداة المراد حذفها" } }, ["tool_id"]),
+  mkTool("list_custom_tools", "عرض قائمة جميع الأدوات المخصصة المضافة", {}, []),
+  mkTool("update_custom_tool", "تعديل أداة مخصصة موجودة — نفس معاملات add_custom_tool", 
+    { tool_id: { type: "string", description: "معرف الأداة" }, name: { type: "string" }, name_ar: { type: "string" }, icon: { type: "string" },
+      description: { type: "string" }, category: { type: "string" }, execution_type: { type: "string" },
+      config: { type: "string", description: "JSON STRING" }, args_def: { type: "string", description: "JSON STRING" } },
+    ["tool_id"]),
   // FILE SENDING
   mkTool("send_file_to_user", "إرسال ملف للمستخدم مباشرة في الشات", 
     { file_url: { type: "string" }, file_name: { type: "string" }, description: { type: "string" } }, ["file_url", "file_name"]),
@@ -322,13 +330,77 @@ async function addCustomToolToDB(args: Record<string, string>): Promise<string> 
     if (toolArgs.length === 0) toolArgs = [{ key: "target", label: "الهدف", placeholder: "example.com", required: true }];
     const toolCategory = ["scanning", "offensive", "defensive"].includes(category) ? category : "scanning";
 
-    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools`, {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools?on_conflict=tool_id`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation" },
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation,resolution=merge-duplicates" },
       body: JSON.stringify({ tool_id, name: toolName || tool_id, name_ar, icon: icon || "🔧", description: description || `أداة مخصصة: ${name_ar}`, category: toolCategory, args: toolArgs, execution_type, execution_config: execConfig }),
     });
     if (!resp.ok) return `❌ فشل الإضافة: ${await resp.text()}`;
-    return `✅ تم إضافة الأداة "${name_ar}" (${tool_id})\n📌 التصنيف: ${toolCategory} | النوع: ${execution_type}`;
+    return `✅ تم إضافة/تعديل الأداة "${name_ar}" (${tool_id})\n📌 التصنيف: ${toolCategory} | النوع: ${execution_type}`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function deleteCustomToolFromDB(tool_id: string): Promise<string> {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools?tool_id=eq.${encodeURIComponent(tool_id)}`, {
+      method: "DELETE",
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation" },
+    });
+    if (!resp.ok) return `❌ فشل الحذف: ${resp.status}`;
+    const deleted = await resp.json();
+    if (deleted.length === 0) return `❌ لم يتم العثور على أداة بمعرف: ${tool_id}`;
+    return `✅ تم حذف الأداة "${deleted[0].name_ar}" (${tool_id})`;
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function listCustomToolsFromDB(): Promise<string> {
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools?order=created_at.asc`, {
+      headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+    if (!resp.ok) return `❌ فشل الاسترجاع: ${resp.status}`;
+    const tools = await resp.json();
+    if (tools.length === 0) return "📭 لا توجد أدوات مخصصة بعد";
+    const lines = [`🧰 الأدوات المخصصة (${tools.length}):\n${"─".repeat(30)}`];
+    for (const t of tools) {
+      lines.push(`${t.icon} **${t.name_ar}** (${t.tool_id})\n   📁 ${t.category} | ⚙️ ${t.execution_type} | 📝 ${t.description.slice(0, 60)}`);
+    }
+    return lines.join("\n");
+  } catch (e) {
+    return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
+  }
+}
+
+async function updateCustomToolInDB(args: Record<string, string>): Promise<string> {
+  try {
+    const { tool_id, ...updates } = args;
+    if (!tool_id) return "❌ يجب تقديم tool_id";
+
+    const body: Record<string, any> = {};
+    if (updates.name) body.name = updates.name;
+    if (updates.name_ar) body.name_ar = updates.name_ar;
+    if (updates.icon) body.icon = updates.icon;
+    if (updates.description) body.description = updates.description;
+    if (updates.category && ["scanning", "offensive", "defensive"].includes(updates.category)) body.category = updates.category;
+    if (updates.execution_type) body.execution_type = updates.execution_type;
+    if (updates.config) { try { body.execution_config = (typeof updates.config === "object") ? updates.config : JSON.parse(updates.config); } catch {} }
+    if (updates.args_def) { try { body.args = (typeof updates.args_def === "object") ? updates.args_def : JSON.parse(updates.args_def); } catch {} }
+
+    if (Object.keys(body).length === 0) return "❌ لم يتم تقديم أي حقول للتعديل";
+
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/custom_tools?tool_id=eq.${encodeURIComponent(tool_id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Prefer": "return=representation" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) return `❌ فشل التعديل: ${resp.status}`;
+    const updated = await resp.json();
+    if (updated.length === 0) return `❌ لم يتم العثور على أداة بمعرف: ${tool_id}`;
+    return `✅ تم تعديل الأداة "${updated[0].name_ar}" (${tool_id})\n📌 الحقول المعدلة: ${Object.keys(body).join(", ")}`;
   } catch (e) {
     return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
   }
@@ -509,6 +581,9 @@ async function executeToolCall(name: string, args: Record<string, string>): Prom
     }
   }
   if (name === "add_custom_tool") return addCustomToolToDB(args);
+  if (name === "delete_custom_tool") return deleteCustomToolFromDB(args.tool_id);
+  if (name === "list_custom_tools") return listCustomToolsFromDB();
+  if (name === "update_custom_tool") return updateCustomToolInDB(args);
   if (name === "recall_target") return recallTarget(args.target);
   if (name === "save_scan_result") return saveScanResult(args);
   if (name === "generate_report") return generateReport(args);

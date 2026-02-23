@@ -729,8 +729,11 @@ async function callAI(messages: any[], tools: any[], stream: boolean, customProv
   });
 }
 
+// Global round-robin counter for even key distribution
+let globalKeyCounter = 0;
+
 // Call AI with fallback keys, smart queue, and retry with backoff
-async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[]; allProviderKeys?: { providerId: string; keys: string[] }[] }, startFromKey = 0): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
+async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[]; allProviderKeys?: { providerId: string; keys: string[] }[] }, startFromKey = -1): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
   // Smart queue: wait for turn before making request
   await requestQueue.waitTurn();
 
@@ -738,7 +741,6 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
   const attempts: { providerId: string; modelId: string; apiKey: string }[] = [];
   
   if (customProvider?.allProviderKeys && customProvider.allProviderKeys.length > 0) {
-    // Use allProviderKeys - try all providers and all their keys
     for (const providerEntry of customProvider.allProviderKeys) {
       const modelId = providerEntry.providerId === customProvider.providerId 
         ? customProvider.modelId 
@@ -748,7 +750,6 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
       }
     }
   } else if (customProvider?.apiKeys && customProvider.apiKeys.length > 0) {
-    // Legacy: only current provider keys
     for (const key of customProvider.apiKeys) {
       attempts.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, apiKey: key });
     }
@@ -757,14 +758,16 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
   }
 
   if (attempts.length === 0) {
-    // No custom provider, use default Lovable AI
     const response = await callAI(messages, tools, stream);
     if (response.ok) requestQueue.onSuccess();
     return { response, usedKeyIndex: 0 };
   }
 
-  // Reorder: start from startFromKey
-  const reordered = [...attempts.slice(startFromKey % attempts.length), ...attempts.slice(0, startFromKey % attempts.length)];
+  // Round-robin: use global counter for even distribution, or explicit startFromKey
+  const startIdx = startFromKey >= 0 ? startFromKey : globalKeyCounter;
+  globalKeyCounter = (startIdx + 1) % attempts.length;
+  
+  const reordered = [...attempts.slice(startIdx % attempts.length), ...attempts.slice(0, startIdx % attempts.length)];
   
   const errors: string[] = [];
 
@@ -917,7 +920,7 @@ serve(async (req) => {
         try {
           let round = 0;
           let conversationMessages = [...budgetedMessages];
-          let lastSuccessfulKey = 0; // Track which key worked last
+          // Round-robin distributes keys evenly via globalKeyCounter
 
           while (round < MAX_ROUNDS) {
             if (closed || timeLeft() < 15_000) {
@@ -941,13 +944,10 @@ serve(async (req) => {
             recordTokenUsage(estimateTokens(JSON.stringify(conversationMessages)) + 1024);
 
             const { response: aiResponse, usedKeyIndex, errorDetails } = await withTimeout(
-              callAIWithFallback(conversationMessages, aiTools, false, effectiveProvider, lastSuccessfulKey),
+              callAIWithFallback(conversationMessages, aiTools, false, effectiveProvider),
               Math.min(30_000, timeLeft()),
               "طلب AI"
             );
-
-            // Silently update the last successful key - no interruption message
-            lastSuccessfulKey = usedKeyIndex;
 
             if (!aiResponse.ok) {
               const status = aiResponse.status;
@@ -1074,7 +1074,7 @@ serve(async (req) => {
             try {
               const finalMessages = [...conversationMessages, { role: "user", content: "قدم الآن تقريراً أمنياً شاملاً ومرتباً بالأولوية بناءً على كل النتائج السابقة. احسب Security Score من 0-100 وأضف <!--SECURITY_SCORE:XX--> في النهاية. لا تستخدم أدوات. كن مختصراً." }];
               const { response: finalResponse } = await withTimeout(
-                callAIWithFallback(finalMessages, [], true, effectiveProvider, lastSuccessfulKey),
+                callAIWithFallback(finalMessages, [], true, effectiveProvider),
                 Math.min(30_000, timeLeft()),
                 "التحليل النهائي"
               );

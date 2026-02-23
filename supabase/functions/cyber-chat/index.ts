@@ -992,7 +992,38 @@ serve(async (req) => {
             const aiData = isAnthropic ? parseAnthropicResponse(await aiResponse.json()) : await aiResponse.json();
             const assistantMsg = aiData.choices?.[0]?.message;
 
-            if (!assistantMsg?.tool_calls || assistantMsg.tool_calls.length === 0) {
+            let toolCalls = assistantMsg?.tool_calls || [];
+            
+            // FALLBACK: If model wrote <tool_call> as text instead of using function calling
+            if (toolCalls.length === 0 && assistantMsg?.content) {
+              const toolCallRegex = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
+              let match;
+              const parsedCalls: any[] = [];
+              while ((match = toolCallRegex.exec(assistantMsg.content)) !== null) {
+                try {
+                  const parsed = JSON.parse(match[1]);
+                  const toolType = parsed.type;
+                  if (toolType) {
+                    delete parsed.type;
+                    parsedCalls.push({
+                      id: `fallback_${round}_${parsedCalls.length}`,
+                      type: "function",
+                      function: { name: toolType, arguments: JSON.stringify(parsed) },
+                    });
+                  }
+                } catch { /* skip invalid */ }
+              }
+              if (parsedCalls.length > 0) {
+                toolCalls = parsedCalls;
+                // Remove tool_call text from content before sending
+                const cleanContent = assistantMsg.content.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "").trim();
+                if (cleanContent) {
+                  // Don't send the text content that contained tool calls - we'll execute them properly
+                }
+              }
+            }
+
+            if (toolCalls.length === 0) {
               if (assistantMsg?.content) send(assistantMsg.content);
               break;
             }
@@ -1062,7 +1093,13 @@ serve(async (req) => {
               send(`📌 **${tr.name}:**\n\`\`\`\n${tr.result.slice(0, 800)}\n\`\`\`\n`);
             }
 
-            conversationMessages.push(assistantMsg);
+            // Build proper assistant message with tool_calls for conversation history
+            const assistantMsgForHistory = {
+              role: "assistant",
+              content: null,
+              tool_calls: toolCalls,
+            };
+            conversationMessages.push(assistantMsgForHistory);
             for (const tr of toolResults) {
               conversationMessages.push({ role: "tool", tool_call_id: tr.tool_call_id, content: tr.result.slice(0, 1500) });
             }

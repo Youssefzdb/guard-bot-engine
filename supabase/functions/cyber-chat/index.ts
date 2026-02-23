@@ -1028,7 +1028,6 @@ serve(async (req) => {
               break;
             }
 
-            const toolCalls = assistantMsg.tool_calls;
             const toolNames = toolCalls.map((tc: any) => tc.function.name).join(", ");
             send(`\n⚡ **الجولة ${round} - تنفيذ:** ${toolNames}\n\n`);
 

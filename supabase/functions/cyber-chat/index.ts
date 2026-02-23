@@ -816,7 +816,7 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
       console.log(`${attempt.providerId} key hit rate limit, trying next...`);
       continue;
     }
-    if (status === 401 || status === 403 || status === 402) {
+    if (status === 401 || status === 403 || status === 402 || status === 400) {
       console.log(`${attempt.providerId} key failed with ${status}, trying next...`);
       continue;
     }

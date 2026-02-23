@@ -102,17 +102,51 @@ export async function importTools(json: string): Promise<number> {
 }
 
 export async function importToolsFromGitHub(url: string): Promise<number> {
-  // Convert GitHub blob URL to raw
   let rawUrl = url.trim();
+
+  // Detect repo-only URLs (no file path) and show helpful error
+  const repoOnlyMatch = rawUrl.match(/^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+\/?$/);
+  if (repoOnlyMatch) {
+    // Try common file names in the repo
+    const repoBase = rawUrl.replace(/\/$/, "");
+    const candidates = [
+      `${repoBase}/blob/main/tools.json`,
+      `${repoBase}/blob/master/tools.json`,
+      `${repoBase}/blob/main/custom-tools.json`,
+      `${repoBase}/blob/master/custom-tools.json`,
+    ];
+    for (const candidate of candidates) {
+      const candidateRaw = candidate
+        .replace("github.com", "raw.githubusercontent.com")
+        .replace("/blob/", "/");
+      try {
+        const resp = await fetch(candidateRaw);
+        if (resp.ok) {
+          const text = await resp.text();
+          return importTools(text);
+        }
+      } catch {}
+    }
+    throw new Error("هذا رابط مستودع وليس ملف. أضف مسار الملف مثل:\ngithub.com/user/repo/blob/main/tools.json");
+  }
+
+  // Convert GitHub blob URL to raw
   if (rawUrl.includes("github.com") && rawUrl.includes("/blob/")) {
     rawUrl = rawUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
   } else if (rawUrl.includes("github.com") && !rawUrl.includes("raw.githubusercontent.com")) {
-    // Try converting tree URLs or direct paths
     rawUrl = rawUrl.replace("github.com", "raw.githubusercontent.com").replace("/tree/", "/");
   }
 
   const resp = await fetch(rawUrl);
-  if (!resp.ok) throw new Error(`فشل جلب الملف: ${resp.status} ${resp.statusText}`);
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`فشل جلب الملف (${resp.status}): تأكد أن الرابط يشير لملف JSON صالح`);
+  }
   const text = await resp.text();
-  return importTools(text);
+  
+  try {
+    return importTools(text);
+  } catch (e) {
+    throw new Error("الملف ليس بصيغة JSON صالحة للأدوات");
+  }
 }

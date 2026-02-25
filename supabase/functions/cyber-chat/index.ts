@@ -914,88 +914,127 @@ function getNextAvailableKey(totalKeys: number, startFrom: number): number {
   return startFrom % totalKeys;
 }
 
-// Call AI with fast key switching - optimized for 200+ keys
+// Call AI with smart provider-level switching
+// When a provider hits rate limit (429), skip ALL keys from that provider instantly
 async function callAIWithFallback(messages: any[], tools: any[], stream: boolean, customProvider?: { providerId: string; modelId: string; apiKey: string; apiKeys?: string[]; allProviderKeys?: { providerId: string; keys: string[] }[] }, startFromKey = -1): Promise<{ response: Response; usedKeyIndex: number; errorDetails?: string }> {
   await requestQueue.waitTurn();
 
-  // Build flat list of all keys
-  const attempts: { providerId: string; modelId: string; apiKey: string }[] = [];
+  // Build grouped provider list: each provider with its keys
+  const providerGroups: { providerId: string; modelId: string; keys: string[] }[] = [];
   
   if (customProvider?.allProviderKeys && customProvider.allProviderKeys.length > 0) {
-    for (const providerEntry of customProvider.allProviderKeys) {
+    // Put active provider first
+    const sorted = [...customProvider.allProviderKeys].sort((a, b) => 
+      a.providerId === customProvider.providerId ? -1 : b.providerId === customProvider.providerId ? 1 : 0
+    );
+    for (const providerEntry of sorted) {
+      if (providerEntry.keys.length === 0) continue;
       const modelId = providerEntry.providerId === customProvider.providerId 
         ? customProvider.modelId 
         : (DEFAULT_MODELS[providerEntry.providerId] || customProvider.modelId);
-      for (const key of providerEntry.keys) {
-        attempts.push({ providerId: providerEntry.providerId, modelId, apiKey: key });
-      }
+      providerGroups.push({ providerId: providerEntry.providerId, modelId, keys: providerEntry.keys });
     }
   } else if (customProvider?.apiKeys && customProvider.apiKeys.length > 0) {
-    for (const key of customProvider.apiKeys) {
-      attempts.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, apiKey: key });
-    }
+    providerGroups.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, keys: customProvider.apiKeys });
   } else if (customProvider?.apiKey) {
-    attempts.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, apiKey: customProvider.apiKey });
+    providerGroups.push({ providerId: customProvider.providerId, modelId: customProvider.modelId, keys: [customProvider.apiKey] });
   }
 
-  if (attempts.length === 0) {
+  if (providerGroups.length === 0) {
     const response = await callAI(messages, tools, stream);
     if (response.ok) requestQueue.onSuccess();
     return { response, usedKeyIndex: 0 };
   }
 
-  // Determine start key: explicit or round-robin with skip of failed keys
-  const rawStart = startFromKey >= 0 ? startFromKey : globalKeyCounter;
-  const startIdx = getNextAvailableKey(attempts.length, rawStart);
-  
   const errors: string[] = [];
-  const MAX_RETRIES = Math.min(attempts.length, 10); // Try up to 10 keys max per call
+  const blockedProviders = new Set<string>(); // Providers that hit org-level rate limits
+  let globalIdx = 0;
 
-  for (let i = 0; i < MAX_RETRIES; i++) {
-    const idx = getNextAvailableKey(attempts.length, (startIdx + i) % attempts.length);
-    const attempt = attempts[idx];
-    const config = PROVIDER_CONFIGS[attempt.providerId];
+  for (const group of providerGroups) {
+    if (blockedProviders.has(group.providerId)) continue;
+    const config = PROVIDER_CONFIGS[group.providerId];
     if (!config) continue;
 
-    // NO delay on first attempt, minimal delay on retries (fast switching)
-    if (i > 0) await new Promise(r => setTimeout(r, 100));
+    // Try ONE key per provider first (if org shares limits, no point trying more)
+    const startKey = globalKeyCounter % group.keys.length;
+    let triedOneKey = false;
+    let providerBlocked = false;
 
-    const providerWithKey = { providerId: attempt.providerId, modelId: attempt.modelId, apiKey: attempt.apiKey, apiKeys: [attempt.apiKey] };
-    const response = await callAI(messages, tools, stream, providerWithKey);
-    
-    if (response.ok) {
-      requestQueue.onSuccess();
-      // Update global counter to next key after the successful one
-      globalKeyCounter = (idx + 1) % attempts.length;
-      return { response, usedKeyIndex: idx };
-    }
-    
-    const status = response.status;
-    let errBody = "";
-    try { errBody = await response.text(); } catch {}
-    
-    // Mark this key as failed
-    failedKeys.set(idx, Date.now());
-    
-    const maskedKey = attempt.apiKey.slice(0, 6) + "***" + attempt.apiKey.slice(-4);
-    errors.push(`مفتاح#${idx + 1} (${maskedKey}): خطأ ${status}`);
-    console.log(`Key #${idx + 1} failed with ${status}, switching instantly...`);
+    for (let k = 0; k < group.keys.length; k++) {
+      const keyIdx = (startKey + k) % group.keys.length;
+      const apiKey = group.keys[keyIdx];
+      
+      if (k > 0) await new Promise(r => setTimeout(r, 50));
 
-    if (status === 429 || status === 401 || status === 403 || status === 402 || status === 400) {
-      continue; // Fast switch to next key
+      const providerWithKey = { providerId: group.providerId, modelId: group.modelId, apiKey, apiKeys: [apiKey] };
+      const response = await callAI(messages, tools, stream, providerWithKey);
+      
+      if (response.ok) {
+        requestQueue.onSuccess();
+        globalKeyCounter = keyIdx + 1;
+        console.log(`✅ Success with ${group.providerId} key #${keyIdx + 1}`);
+        return { response, usedKeyIndex: globalIdx + keyIdx };
+      }
+      
+      const status = response.status;
+      let errBody = "";
+      try { errBody = await response.text(); } catch {}
+      
+      const maskedKey = apiKey.slice(0, 6) + "***" + apiKey.slice(-4);
+      errors.push(`${group.providerId} مفتاح#${keyIdx + 1} (${maskedKey}): خطأ ${status}`);
+      console.log(`${group.providerId} key #${keyIdx + 1} failed with ${status}`);
+
+      if (status === 429) {
+        // Check if it's an org-level rate limit (affects all keys)
+        const isOrgLimit = errBody.includes("organization") || errBody.includes("org_") || errBody.includes("tokens per") || errBody.includes("requests per");
+        if (isOrgLimit || triedOneKey) {
+          // Org-level limit: skip ALL remaining keys from this provider
+          console.log(`⚡ ${group.providerId} org-level rate limit detected, skipping ALL ${group.keys.length} keys → next provider`);
+          blockedProviders.add(group.providerId);
+          providerBlocked = true;
+          break;
+        }
+        triedOneKey = true;
+        continue; // Try one more key to confirm it's org-level
+      }
+      
+      if (status === 401 || status === 403) {
+        continue; // Bad key, try next key (not org-level)
+      }
+      
+      if (status === 402) {
+        // No balance - skip provider
+        blockedProviders.add(group.providerId);
+        providerBlocked = true;
+        break;
+      }
+      
+      // Unknown error - try next provider
+      break;
     }
-    // Other errors: stop trying
-    return { response, usedKeyIndex: idx, errorDetails: errors.join("\n") };
+
+    globalIdx += group.keys.length;
+    if (providerBlocked) continue;
   }
 
-  // All retried keys failed
-  globalKeyCounter = (startIdx + MAX_RETRIES) % attempts.length;
-  const lastIdx = getNextAvailableKey(attempts.length, globalKeyCounter);
-  const lastAttempt = attempts[lastIdx];
-  const lastProvider = { providerId: lastAttempt.providerId, modelId: lastAttempt.modelId, apiKey: lastAttempt.apiKey, apiKeys: [lastAttempt.apiKey] };
+  // All custom providers failed - try Lovable AI as ultimate fallback
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (LOVABLE_API_KEY) {
+    console.log("🔄 All providers failed, falling back to Lovable AI...");
+    errors.push("⬇️ جاري التبديل إلى Lovable AI كخط دفاع أخير");
+    const response = await callAI(messages, tools, stream);
+    if (response.ok) {
+      requestQueue.onSuccess();
+      return { response, usedKeyIndex: -1, errorDetails: errors.join("\n") };
+    }
+  }
+
+  // Absolute last resort: return the last error
+  const lastGroup = providerGroups[providerGroups.length - 1];
+  const lastKey = lastGroup.keys[0];
+  const lastProvider = { providerId: lastGroup.providerId, modelId: lastGroup.modelId, apiKey: lastKey, apiKeys: [lastKey] };
   const response = await callAI(messages, tools, stream, lastProvider);
-  if (response.ok) requestQueue.onSuccess();
-  return { response, usedKeyIndex: lastIdx, errorDetails: errors.join("\n") };
+  return { response, usedKeyIndex: 0, errorDetails: errors.join("\n") };
 }
 
 // Parse Anthropic response to OpenAI-compatible format

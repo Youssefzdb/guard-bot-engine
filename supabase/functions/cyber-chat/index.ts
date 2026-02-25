@@ -135,6 +135,18 @@ const SYSTEM_PROMPT = `أنت أداة اختبار اختراق احترافي�
 - vt_scan_file_hash: فحص ملف عبر hash
 ⚡ استخدم أدوات VirusTotal دائماً في الفحوصات الشاملة — هي تعمل بمفاتيح API المُعدة في الإعدادات مع دوران تلقائي بين المفاتيح.
 
+🔬 نظام استخراج الدليل (Proof of Concept - PoC):
+- بعد كل اختبار ثغرة (sqli_test, xss_test, lfi_test, ssti_test, etc.)، إذا أظهرت النتيجة "⚠️ محتمل!" أو "مشبوه"، يجب عليك استخدام extract_proof فوراً لتأكيد الثغرة بدليل قاطع
+- extract_proof يقوم بإعادة الطلب مع payloads تأكيدية ويستخرج:
+  * 📸 لقطة من الاستجابة (Response Snippet) توضح الثغرة
+  * 🧬 الـ Payload الدقيق الذي نجح
+  * 📊 مقارنة بين الطلب العادي والطلب الخبيث
+  * 🔗 الـ HTTP Request/Response الكامل كدليل
+  * ⚖️ تصنيف: مؤكد (Confirmed) / محتمل (Probable) / إيجابي كاذب (False Positive)
+- لا تقبل أبداً نتيجة "محتمل" بدون تأكيد — استخدم extract_proof دائماً
+- في التقرير النهائي، كل ثغرة يجب أن تحتوي على قسم "الدليل" (Evidence) مع لقطات حقيقية
+- قاعدة ذهبية: ثغرة بدون دليل = لا ثغرة
+
 لديك أدوات لإدارة بوت تيليجرام:
 - telegram_add_command, telegram_remove_command, telegram_list_commands, telegram_bot_status
 - telegram_send_file, telegram_send_photo
@@ -312,6 +324,10 @@ const aiTools = [
   mkTool("vt_scan_domain", "تحليل نطاق عبر VirusTotal (سمعة، DNS، شهادة SSL، نطاقات فرعية)", { domain: { type: "string" } }, ["domain"]),
   mkTool("vt_scan_ip", "تحليل عنوان IP عبر VirusTotal (ASN، دولة، سمعة)", { ip: { type: "string" } }, ["ip"]),
   mkTool("vt_scan_file_hash", "فحص ملف عبر hash في VirusTotal", { hash: { type: "string" } }, ["hash"]),
+  // PROOF EXTRACTION
+  mkTool("extract_proof", "استخراج دليل (PoC) لتأكيد ثغرة أمنية مكتشفة — يجب استخدامها بعد كل اكتشاف 'محتمل'", 
+    { url: { type: "string", description: "الرابط المستهدف" }, vuln_type: { type: "string", description: "نوع الثغرة: sqli, xss, lfi, rfi, ssrf, ssti, xxe, nosql, cors, open_redirect, crlf, path_traversal, clickjacking" }, 
+      payload: { type: "string", description: "الـ Payload المشبوه الذي أظهر نتيجة إيجابية (اختياري)" } }, ["url", "vuln_type"]),
   // MEMORY & REPORTING
   mkTool("recall_target", "استرجاع نتائج فحوصات سابقة لهدف معين من الذاكرة", { target: { type: "string" } }, ["target"]),
   mkTool("save_scan_result", "حفظ نتيجة فحص في الذاكرة للرجوع إليها لاحقاً", 
@@ -955,16 +971,16 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
     const config = PROVIDER_CONFIGS[group.providerId];
     if (!config) continue;
 
-    // Try ONE key per provider first (if org shares limits, no point trying more)
+    // Try ALL keys from this provider before moving to next
     const startKey = globalKeyCounter % group.keys.length;
-    let triedOneKey = false;
     let providerBlocked = false;
+    let consecutiveRateLimits = 0;
 
     for (let k = 0; k < group.keys.length; k++) {
       const keyIdx = (startKey + k) % group.keys.length;
       const apiKey = group.keys[keyIdx];
       
-      if (k > 0) await new Promise(r => setTimeout(r, 50));
+      if (k > 0) await new Promise(r => setTimeout(r, 100));
 
       const providerWithKey = { providerId: group.providerId, modelId: group.modelId, apiKey, apiKeys: [apiKey] };
       const response = await callAI(messages, tools, stream, providerWithKey);
@@ -972,7 +988,7 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
       if (response.ok) {
         requestQueue.onSuccess();
         globalKeyCounter = keyIdx + 1;
-        console.log(`✅ Success with ${group.providerId} key #${keyIdx + 1}`);
+        console.log(`✅ Success with ${group.providerId} key #${keyIdx + 1}/${group.keys.length}`);
         return { response, usedKeyIndex: globalIdx + keyIdx };
       }
       
@@ -982,20 +998,21 @@ async function callAIWithFallback(messages: any[], tools: any[], stream: boolean
       
       const maskedKey = apiKey.slice(0, 6) + "***" + apiKey.slice(-4);
       errors.push(`${group.providerId} مفتاح#${keyIdx + 1} (${maskedKey}): خطأ ${status}`);
-      console.log(`${group.providerId} key #${keyIdx + 1} failed with ${status}`);
+      console.log(`${group.providerId} key #${keyIdx + 1}/${group.keys.length} failed with ${status}`);
 
       if (status === 429) {
-        // Check if it's an org-level rate limit (affects all keys)
-        const isOrgLimit = errBody.includes("organization") || errBody.includes("org_") || errBody.includes("tokens per") || errBody.includes("requests per");
-        if (isOrgLimit || triedOneKey) {
-          // Org-level limit: skip ALL remaining keys from this provider
-          console.log(`⚡ ${group.providerId} org-level rate limit detected, skipping ALL ${group.keys.length} keys → next provider`);
+        consecutiveRateLimits++;
+        // Only skip provider if ALL keys hit 429 with org-level indicators
+        const isOrgLimit = errBody.includes("organization") || errBody.includes("org_") || errBody.includes("tokens per");
+        if (isOrgLimit && consecutiveRateLimits >= Math.min(3, group.keys.length)) {
+          // Confirmed org-level limit after trying multiple keys
+          console.log(`⚡ ${group.providerId} org-level rate limit confirmed after ${consecutiveRateLimits} keys, skipping → next provider`);
           blockedProviders.add(group.providerId);
           providerBlocked = true;
           break;
         }
-        triedOneKey = true;
-        continue; // Try one more key to confirm it's org-level
+        // Otherwise keep trying remaining keys — they might be on different accounts
+        continue;
       }
       
       if (status === 401 || status === 403) {

